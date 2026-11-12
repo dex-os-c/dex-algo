@@ -367,6 +367,12 @@ The terminal dashboard is accessible at `http://localhost:8000`:
 | `GET` | `/api/bot/config` | Reads active risk and strategy configuration parameters. |
 | `POST` | `/api/bot/config` | Updates risk %, max positions, or symbol watchlist dynamically at runtime. |
 | `GET` | `/api/logs` | Fetches recent bot logs (`?limit=100&level=INFO`). |
+| `GET` | `/api/crypto/state` | Returns live crypto price, 24h change, active market regime, and alpha score. |
+| `GET` | `/api/crypto/regime` | Returns current regime (BULL, BEAR, COMPRESSION, BREAKOUT), ADX, and BBW. |
+| `GET` | `/api/crypto/alphas` | Returns individual alpha scores (Trend, Mean-Rev, OFI) and composite score. |
+| `GET` | `/api/crypto/features` | Returns strictly lag-1 causal feature matrix (Parkinson vol, Yang-Zhang vol, VWAP Z-score). |
+| `GET` | `/api/risk/kelly` | Live Bayesian Half-Kelly parameters (alpha prior, beta prior, win rate, target vol scale). |
+| `GET` | `/api/backtest/walkforward` | Executes walk-forward optimization with de Prado embargo cross-validation & Monte Carlo cones. |
 
 ### WebSocket Live Stream (`/ws`)
 Connect via `ws://localhost:8000/ws`:

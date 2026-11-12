@@ -677,6 +677,12 @@ class MultiAlphaEnsemble:
         else:
             direction = "NEUTRAL"
 
+        # Directional Harmony Filter: Block counter-trend trades against verified macro trends
+        if direction == "SELL" and active_regime.startswith("TRENDING_BULL"):
+            direction = "NEUTRAL"
+        elif direction == "BUY" and active_regime.startswith("TRENDING_BEAR"):
+            direction = "NEUTRAL"
+
         abs_score = abs(composite_score)
         scores = [trend_score, mean_rev_score, ofi_score]
 

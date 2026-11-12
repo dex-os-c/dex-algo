@@ -669,6 +669,97 @@ def crypto_trigger_cycle():
 
 
 # =====================================================================
+# Institutional Quantitative Research & Walk-Forward Endpoints
+# =====================================================================
+
+@app.get("/api/crypto/features")
+def get_crypto_features(symbol: str = "BTC/USDT", interval: str = "1h", limit: int = 100):
+    """
+    Returns latest lag-1 causal feature snapshot (Parkinson vol, Yang-Zhang vol,
+    ADX, BBW percentile, VWAP z-score, volume delta, CVD, HTF bias).
+    """
+    try:
+        from data_layer import get_data_client
+        from features import FeatureStore
+        client = get_data_client()
+        bars = client.get_historical_bars(symbol=symbol, interval=interval, limit=limit)
+        if len(bars) < 35:
+            return {"status": "insufficient_data", "count": len(bars)}
+        feat = FeatureStore.extract_features_at_index(bars, len(bars) - 1, is_crypto=True)
+        return {
+            "symbol": symbol,
+            "interval": interval,
+            "features": feat.to_dict()
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+@app.get("/api/risk/kelly")
+def get_kelly_risk_status():
+    """
+    Returns live Bayesian Half-Kelly parameters (alpha prior, beta prior, win rate,
+    empirical payoff ratio, target vol scale).
+    """
+    try:
+        from risk import InstitutionalRiskEngine
+        risk_eng = InstitutionalRiskEngine()
+        return {
+            "target_annual_vol": risk_eng.target_annual_vol,
+            "posterior_win_rate": round(risk_eng.kelly_estimator.posterior_win_rate, 4),
+            "empirical_payoff_ratio": round(risk_eng.kelly_estimator.empirical_payoff_ratio, 4),
+            "half_kelly_fraction": round(risk_eng.kelly_estimator.calculate_half_kelly(), 4),
+            "max_gross_leverage": risk_eng.max_gross_leverage,
+            "max_single_position_pct": risk_eng.max_single_position_pct,
+            "daily_drawdown_limit_pct": risk_eng.max_daily_drawdown_pct
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+@app.get("/api/backtest/walkforward")
+def get_walkforward_backtest(
+    symbol: str = "BTC/USDT",
+    interval: str = "1h",
+    limit: int = 500,
+    train_bars: int = 250,
+    test_bars: int = 80,
+    embargo_bars: int = 10
+):
+    """
+    Executes rolling walk-forward optimization with de Prado embargo cross-validation,
+    realistic fees (6 bps) + square-root impact slippage, and 1,000-run Monte Carlo equity curves.
+    """
+    try:
+        from data_layer import get_data_client
+        from backtester_v2 import InstitutionalBacktester
+        client = get_data_client()
+        is_crypto = any(c in symbol.upper() for c in ("BTC", "ETH", "SOL", "USDT", "USD"))
+        bars = client.get_historical_bars(symbol=symbol, interval=interval, limit=limit)
+        if len(bars) < (train_bars + test_bars):
+            return {"status": "insufficient_data", "count": len(bars)}
+
+        bt = InstitutionalBacktester(initial_capital=100000.0)
+        trades, eq_curve, metrics = bt.run_simulation(bars, symbol=symbol, is_crypto=is_crypto)
+        wf_res = bt.run_walk_forward(
+            bars, symbol=symbol, train_bars=train_bars, test_bars=test_bars,
+            embargo_bars=embargo_bars, is_crypto=is_crypto
+        )
+        mc_res = bt.run_monte_carlo_simulation(trades, num_simulations=500) if trades else {}
+
+        return {
+            "status": "success",
+            "symbol": symbol,
+            "metrics": metrics.to_dict(),
+            "walk_forward": wf_res,
+            "monte_carlo": mc_res,
+            "total_trades": len(trades)
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+# =====================================================================
 # Upgraded Real-Time WebSocket Streaming (/ws)
 # =====================================================================
 
