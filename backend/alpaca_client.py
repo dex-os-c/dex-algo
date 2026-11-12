@@ -27,19 +27,43 @@ class MockAlpacaEngine:
             "NVDA": 138.80,
             "SPY": 586.40,
             "QQQ": 502.90,
+            "BTC/USD": 89450.00,
+            "BTCUSD": 89450.00,
+            "ETH/USD": 3120.00,
+            "ETHUSD": 3120.00,
+            "SOL/USD": 215.00,
+            "SOLUSD": 215.00,
         }
         self.current_prices = dict(self.base_prices)
 
     def _get_live_price(self, symbol: str) -> float:
         symbol = symbol.upper()
+        clean = symbol.replace("/", "")
         if symbol not in self.current_prices:
-            self.current_prices[symbol] = 150.00
+            if clean in self.current_prices:
+                self.current_prices[symbol] = self.current_prices[clean]
+            elif "BTC" in symbol:
+                self.current_prices[symbol] = 89450.00
+            elif "ETH" in symbol:
+                self.current_prices[symbol] = 3120.00
+            elif "SOL" in symbol:
+                self.current_prices[symbol] = 215.00
+            else:
+                self.current_prices[symbol] = 150.00
         
         # Introduce micro-drift (+- 0.15%)
         drift = (random.random() - 0.49) * 0.003
         new_price = round(self.current_prices[symbol] * (1.0 + drift), 2)
         self.current_prices[symbol] = max(1.0, new_price)
         return self.current_prices[symbol]
+
+    def reset_account(self, cash: float = 100000.0) -> Dict[str, Any]:
+        """Resets the mock paper account back to starting cash and clears open positions."""
+        self.cash = float(cash)
+        self.starting_cash = float(cash)
+        self.positions.clear()
+        self.orders.clear()
+        return self.get_account()
 
     def get_clock(self) -> Dict[str, Any]:
         now = datetime.datetime.now(datetime.timezone.utc)
@@ -117,7 +141,7 @@ class MockAlpacaEngine:
     def create_order(
         self,
         symbol: str,
-        qty: int,
+        qty: Union[int, float],
         side: str,
         order_type: str = "market",
         time_in_force: str = "gtc",
@@ -125,17 +149,21 @@ class MockAlpacaEngine:
         take_profit: Optional[float] = None
     ) -> Dict[str, Any]:
         sym = symbol.upper()
+        clean_sym = sym.replace("/", "")
+        qty = float(qty)
         fill_price = self._get_live_price(sym)
         order_id = f"mock-order-{int(time.time() * 1000)}-{random.randint(100, 999)}"
         side = side.lower()
 
         if side == "buy":
             total_cost = fill_price * qty
-            if total_cost > self.cash:
-                raise ValueError(f"Insufficient cash: required ${total_cost:.2f}, available ${self.cash:.2f}")
+            available_buying_power = max(self.cash, self.cash * 2.0)
+            if total_cost > available_buying_power:
+                raise ValueError(f"Insufficient buying power: required ${total_cost:,.2f}, available ${available_buying_power:,.2f}")
             self.cash -= total_cost
-            if sym in self.positions:
-                prev = self.positions[sym]
+            target_key = sym if sym in self.positions else (clean_sym if clean_sym in self.positions else sym)
+            if target_key in self.positions:
+                prev = self.positions[target_key]
                 new_qty = prev["qty"] + qty
                 new_cost = (prev["qty"] * prev["avg_entry_price"]) + total_cost
                 prev["avg_entry_price"] = round(new_cost / new_qty, 2)
@@ -145,7 +173,7 @@ class MockAlpacaEngine:
                 if take_profit:
                     prev["take_profit"] = take_profit
             else:
-                self.positions[sym] = {
+                self.positions[target_key] = {
                     "qty": qty,
                     "avg_entry_price": fill_price,
                     "current_price": fill_price,
@@ -156,14 +184,15 @@ class MockAlpacaEngine:
                     "take_profit": take_profit or 0.0
                 }
         elif side == "sell":
-            if sym not in self.positions or self.positions[sym]["qty"] < qty:
-                raise ValueError(f"Cannot sell {qty} shares of {sym}: insufficient position")
-            pos = self.positions[sym]
+            target_key = sym if sym in self.positions else (clean_sym if clean_sym in self.positions else None)
+            if not target_key or self.positions[target_key]["qty"] < (qty - 1e-6):
+                raise ValueError(f"Cannot sell {qty} units of {sym}: insufficient position")
+            pos = self.positions[target_key]
             proceeds = fill_price * qty
             self.cash += proceeds
             pos["qty"] -= qty
-            if pos["qty"] <= 0:
-                del self.positions[sym]
+            if pos["qty"] <= 1e-6:
+                del self.positions[target_key]
 
         order_record = {
             "id": order_id,
@@ -289,6 +318,10 @@ class AlpacaClient:
             return resp.json()
         except Exception:
             return self.mock_engine.get_clock()
+
+    def reset_account(self, cash: float = 100000.0) -> Dict[str, Any]:
+        """Resets the account balance and closes all positions in mock paper mode."""
+        return self.mock_engine.reset_account(cash)
 
     def get_account(self) -> Dict[str, Any]:
         if self._force_mock:

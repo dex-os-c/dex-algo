@@ -884,9 +884,13 @@ class ExecutionEngine:
     - Deep integration with Live Institutional Risk Engine (Vol targeting, Bayesian Half-Kelly).
     """
 
-    def __init__(self, broadcast_callback: Optional[Callable[[Dict[str, Any]], None]] = None):
+    def __init__(
+        self,
+        broadcast_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
+        alpaca_client: Optional[AlpacaClient] = None
+    ):
         self.config = get_config()
-        self.alpaca = AlpacaClient()
+        self.alpaca = alpaca_client or AlpacaClient()
         self.strategy = TrendMomentumStrategy()
         self.risk_manager = RiskManager()
         self.broadcast_callback = broadcast_callback
@@ -904,7 +908,7 @@ class ExecutionEngine:
 
         # 3. Multi-Alpha Ensembles (Classical + Orchestrator)
         self.alpha_ensemble = get_multi_alpha_ensemble()
-        self.alpha_orchestrator = MultiAlphaOrchestrator(entry_threshold=0.35, exit_threshold=0.15)
+        self.alpha_orchestrator = MultiAlphaOrchestrator(entry_threshold=0.20, exit_threshold=0.10)
 
         # 4. Institutional Risk Engines (Dual integration)
         self.risk_engine = InstitutionalRiskEngine(
@@ -1531,21 +1535,25 @@ class ExecutionEngine:
     # ==========================================================================
 
     def _sync_mock_crypto_price(self, symbol: str, price: float):
+        norm_sym = symbol.upper()
+        clean_sym = norm_sym.replace("/", "")
         if hasattr(self.alpaca, "mock_engine") and hasattr(self.alpaca.mock_engine, "current_prices"):
-            norm_sym = symbol.upper()
-            clean_sym = norm_sym.replace("/", "")
             self.alpaca.mock_engine.current_prices[norm_sym] = price
             self.alpaca.mock_engine.current_prices[clean_sym] = price
+        elif hasattr(self.alpaca, "current_prices"):
+            self.alpaca.current_prices[norm_sym] = price
+            self.alpaca.current_prices[clean_sym] = price
 
     def _get_open_crypto_positions(self) -> List[Dict[str, Any]]:
         try:
             all_positions = self.alpaca.get_positions()
             crypto_positions = []
-            target_norm = self.crypto_symbol.upper()
-            target_clean = target_norm.replace("/", "")
+            valid_symbols = {s.upper() for s in self.trading_crypto_symbols}
+            valid_symbols.update({s.upper().replace("/", "") for s in self.trading_crypto_symbols})
+            valid_symbols.update({"BTC/USD", "BTCUSD", "ETH/USD", "ETHUSD", "SOL/USD", "SOLUSD"})
             for p in all_positions:
                 sym = p.get("symbol", "").upper()
-                if sym in (target_norm, target_clean, "BTC/USD", "BTCUSD", "ETH/USD", "ETHUSD", "SOL/USD", "SOLUSD"):
+                if sym in valid_symbols or "/" in sym:
                     crypto_positions.append(p)
             return crypto_positions
         except Exception as e:
@@ -1701,8 +1709,12 @@ class ExecutionEngine:
                 open_crypto_positions = self._get_open_crypto_positions()
 
                 # 6. Monitor Open Positions (Monotonic Chandelier Ratchet & Soft Exits)
+                sym_clean = sym.upper().replace("/", "")
                 for pos in open_crypto_positions:
                     pos_sym = pos.get("symbol", sym)
+                    # In multi-asset scanning, strictly evaluate exits using that specific asset's price and ATR
+                    if pos_sym.upper().replace("/", "") != sym_clean:
+                        continue
                     pos_qty = float(pos.get("qty", 0.0))
                     avg_entry = float(pos.get("avg_entry_price", curr_px))
 
@@ -1811,9 +1823,16 @@ class ExecutionEngine:
                         if pos_sym in self.crypto_positions_tracking:
                             del self.crypto_positions_tracking[pos_sym]
 
-                # 7. Evaluate New Entry Signals (if not holding position)
+                # 7. Evaluate New Entry Signals (if not holding position for this symbol)
                 open_crypto_positions = self._get_open_crypto_positions()
-                if not open_crypto_positions and self.crypto_enabled:
+                sym_clean = sym.upper().replace("/", "")
+                has_sym_pos = any(
+                    p.get("symbol", "").upper().replace("/", "") == sym_clean
+                    for p in open_crypto_positions
+                )
+                guard = getattr(self.risk_engine, "concentration_guard", None)
+                max_pos = getattr(guard, "max_concurrent", 6)
+                if not has_sym_pos and len(open_crypto_positions) < max_pos and self.crypto_enabled:
                     breaker_active = self.risk_engine.check_circuit_breaker(equity)
 
                     if breaker_active:
@@ -2286,7 +2305,8 @@ class ExecutionEngine:
             except asyncio.TimeoutError:
                 # Timer tick
                 if self.crypto_enabled:
-                    self.execute_crypto_cycle()
+                    for s in self.trading_crypto_symbols:
+                        self.execute_crypto_cycle(s)
             except Exception as e:
                 logger.debug(f"Async loop error: {e}")
         database.add_log("INFO", "Async Event-Driven Execution Loop terminated.")
@@ -2317,7 +2337,8 @@ class ExecutionEngine:
         while self._running and not self._stop_event.is_set():
             try:
                 if self.crypto_enabled:
-                    self.execute_crypto_cycle()
+                    for s in self.trading_crypto_symbols:
+                        self.execute_crypto_cycle(s)
             except Exception as e:
                 logger.debug(f"Error in 24/7 crypto stream loop: {e}")
 

@@ -219,6 +219,8 @@ class TestRiskManagement(unittest.TestCase):
     """Verifies position sizing math, 1% capital risk, and position limits."""
 
     def setUp(self):
+        from config import update_config
+        update_config({"RISK_PER_TRADE_PCT": 0.01, "ATR_MULTIPLIER": 2.0, "MAX_POSITIONS": 3})
         self.risk_manager = RiskManager()
 
     def test_position_sizing_formula(self):

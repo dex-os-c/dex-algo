@@ -276,7 +276,8 @@ class TestTerminalEndToEnd(unittest.TestCase):
             "/api/orderbook",
             "/api/positions/heatmap",
             "/api/backtest/wfo",
-            "/api/backtest/underwater"
+            "/api/backtest/underwater",
+            "/api/market/bars?symbol=BTC/USD&timeframe=1Min&limit=20"
         ]
 
         for ep in endpoints:
@@ -287,6 +288,32 @@ class TestTerminalEndToEnd(unittest.TestCase):
             self.assertNotIn("NaN", text, f"Illegal NaN in endpoint {ep}")
             self.assertNotIn("Infinity", text, f"Illegal Infinity in endpoint {ep}")
             self.assertNotIn("-Infinity", text, f"Illegal -Infinity in endpoint {ep}")
+
+    def test_07_account_reset_and_candlestick_bars(self):
+        """Verifies market bars for candlestick chart and 1-click account reset endpoint."""
+        # 1. Fetch OHLCV Candlestick Bars
+        bars_resp = self.client.get("/api/market/bars?symbol=BTC/USD&timeframe=1Min&limit=30")
+        self.assertEqual(bars_resp.status_code, 200)
+        bars_data = bars_resp.json()
+        self.assertEqual(bars_data["status"], "success")
+        self.assertEqual(bars_data["symbol"], "BTC/USD")
+        self.assertGreaterEqual(bars_data["count"], 10)
+        sample_bar = bars_data["bars"][0]
+        self.assertIn("open", sample_bar)
+        self.assertIn("high", sample_bar)
+        self.assertIn("low", sample_bar)
+        self.assertIn("close", sample_bar)
+        self.assertIn("volume", sample_bar)
+        self.assertGreater(sample_bar["high"], 0.0)
+
+        # 2. Test Account Reset
+        reset_resp = self.client.post("/api/account/reset?cash=100000.0")
+        self.assertEqual(reset_resp.status_code, 200)
+        reset_data = reset_resp.json()
+        self.assertEqual(reset_data["status"], "success")
+        acc = reset_data["account"]
+        self.assertEqual(float(acc["cash"]), 100000.0)
+        self.assertEqual(float(acc["portfolio_value"]), 100000.0)
 
 
 if __name__ == "__main__":

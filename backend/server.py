@@ -32,16 +32,21 @@ connected_websockets: List[WebSocket] = []
 database.init_db()
 
 def get_engine() -> ExecutionEngine:
-    global engine
+    global engine, alpaca
     if engine is None:
         database.init_db()
-        engine = ExecutionEngine(broadcast_callback=sync_broadcast)
+        engine = ExecutionEngine(broadcast_callback=sync_broadcast, alpaca_client=alpaca)
+        alpaca = engine.alpaca
     return engine
 
 def get_alpaca() -> AlpacaClient:
-    global alpaca
+    global alpaca, engine
     if alpaca is None:
-        alpaca = AlpacaClient()
+        if engine is not None:
+            alpaca = engine.alpaca
+        else:
+            eng = get_engine()
+            alpaca = eng.alpaca
     return alpaca
 
 
@@ -1062,7 +1067,7 @@ async def lifespan(app: FastAPI):
     global engine, alpaca
     database.init_db()
     alpaca = AlpacaClient()
-    engine = ExecutionEngine(broadcast_callback=sync_broadcast)
+    engine = ExecutionEngine(broadcast_callback=sync_broadcast, alpaca_client=alpaca)
     
     # Check if equity history has any entries; seed initial entry if fresh
     eq_history = database.get_equity_history(limit=1)
@@ -1122,6 +1127,85 @@ def get_market_quotes():
 def get_account():
     client = get_alpaca()
     return client.get_account()
+
+
+@app.post("/api/account/reset")
+def reset_account(
+    cash: float = Query(100000.0, ge=1000.0, le=10000000.0),
+    _authorized: bool = Depends(verify_api_key)
+):
+    """Resets paper trading account back to specified cash balance and clears all positions."""
+    client = get_alpaca()
+    if hasattr(client, "reset_account"):
+        res = client.reset_account(cash=cash)
+    elif hasattr(client, "mock_engine") and hasattr(client.mock_engine, "reset_account"):
+        res = client.mock_engine.reset_account(cash=cash)
+    else:
+        res = client.get_account()
+
+    eng = get_engine()
+    if eng:
+        eng.orders.clear()
+        eng.oco_pairs.clear()
+        eng.crypto_positions_tracking.clear()
+        eng.tracked_positions.clear()
+
+    database.add_log("SYSTEM", f"Paper trading account reset to ${cash:,.2f} cash balance.")
+    sync_broadcast({"type": "ACCOUNT_RESET", "account": res})
+    return {"status": "success", "message": f"Account reset to ${cash:,.2f}", "account": res}
+
+
+@app.get("/api/market/bars")
+def get_market_bars(
+    symbol: str = Query("BTC/USD", description="Symbol for OHLCV bars (e.g. BTC/USD, ETH/USD, SPY)"),
+    timeframe: str = Query("1Min", description="Bar timeframe: 1Min, 5Min, 15Min, 1Hour, 1Day"),
+    limit: int = Query(60, ge=10, le=500),
+    _authorized: bool = Depends(verify_api_key)
+):
+    """Returns realistic/live OHLCV candlestick bars for high-fidelity charting."""
+    try:
+        norm_sym = symbol.upper().strip()
+        tf = timeframe.strip()
+        # Normalize timeframe strings
+        tf_map = {"1m": "1Min", "5m": "5Min", "15m": "15Min", "1h": "1Hour", "4h": "4Hour", "1D": "1Day", "1d": "1Day"}
+        mapped_tf = tf_map.get(tf, tf)
+
+        bars = []
+        if "/" in norm_sym or norm_sym.endswith("USD"):
+            try:
+                import crypto_feed
+                feed = crypto_feed.get_crypto_feed()
+                bars = feed.get_crypto_bars(symbol=norm_sym, timeframe=mapped_tf, limit=limit)
+            except Exception as fe:
+                logger.debug(f"crypto_feed get_crypto_bars fallback: {fe}")
+        
+        if not bars:
+            client = get_alpaca()
+            bars = client.get_bars(symbol=norm_sym, timeframe=mapped_tf, limit=limit)
+
+        clean_bars = []
+        for b in bars:
+            ts = b.get("t", b.get("time", b.get("timestamp", "")))
+            clean_bars.append({
+                "time": str(ts),
+                "open": round(float(b.get("o", b.get("open", 0.0))), 2),
+                "high": round(float(b.get("h", b.get("high", 0.0))), 2),
+                "low": round(float(b.get("l", b.get("low", 0.0))), 2),
+                "close": round(float(b.get("c", b.get("close", 0.0))), 2),
+                "volume": round(float(b.get("v", b.get("volume", 0.0))), 4),
+                "vwap": round(float(b.get("vw", b.get("vwap", b.get("c", 0.0)))), 2)
+            })
+
+        return database.sanitize_for_json({
+            "status": "success",
+            "symbol": norm_sym,
+            "timeframe": mapped_tf,
+            "count": len(clean_bars),
+            "bars": clean_bars
+        })
+    except Exception as e:
+        logger.error(f"Error fetching bars for {symbol}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/api/positions")

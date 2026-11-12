@@ -265,8 +265,8 @@ class AdaptiveTrendAlpha:
 
     @staticmethod
     def evaluate(f: BarFeatures, historical_closes: Optional[List[float]] = None) -> float:
-        # Strict trend filter: trend alpha is deactivated during choppy/non-trending markets
-        if f.adx < 20.0:
+        # Strict trend filter: trend alpha is deactivated during extreme low-ADX chop (< 12.0)
+        if f.adx < 12.0:
             return 0.0
 
         # 1. Donchian Channel Position (continuous -1.0 to +1.0)
@@ -389,28 +389,23 @@ class OrderFlowBreakoutAlpha:
         imbalance = f.volume_delta_ratio  # between -1.0 and +1.0
         cvd = f.cvd
 
-        if abs(imbalance) < 0.15:
+        if abs(imbalance) < 0.05:
             return 0.0
 
         # Squeeze-expansion volatility booster (fires on volatility expansion)
         expansion_multiplier = 1.30 if f.bbw_percentile > 70.0 else 1.0
 
-        score = 0.0
-        if imbalance >= 0.20:
-            base = 0.45 + min(0.35, (imbalance - 0.20) * 0.70)
-            if cvd > 0:
-                base += 0.15
-            if f.vwap_zscore > 0.2:
-                base += 0.05
-            score = min(1.0, base * expansion_multiplier)
-        elif imbalance <= -0.20:
-            base = -0.45 - min(0.35, (abs(imbalance) - 0.20) * 0.70)
-            if cvd < 0:
-                base -= 0.15
-            if f.vwap_zscore < -0.2:
-                base -= 0.05
-            score = max(-1.0, base * expansion_multiplier)
+        base = math.tanh(imbalance * 3.2)
+        if cvd > 0 and base > 0:
+            base += 0.10
+        elif cvd < 0 and base < 0:
+            base -= 0.10
+        if f.vwap_zscore > 0.2 and base > 0:
+            base += 0.05
+        elif f.vwap_zscore < -0.2 and base < 0:
+            base -= 0.05
 
+        score = base * expansion_multiplier
         return round(max(-1.0, min(1.0, score)), 4)
 
 
@@ -433,8 +428,8 @@ class MultiAlphaOrchestrator:
 
     def __init__(
         self,
-        entry_threshold: float = 0.35,
-        exit_threshold: float = 0.15,
+        entry_threshold: float = 0.20,
+        exit_threshold: float = 0.10,
         enable_online_sharpe: bool = True
     ):
         self.entry_threshold = entry_threshold
@@ -533,8 +528,9 @@ class MultiAlphaOrchestrator:
                 filters_passed = False
                 rejection_reason = "Filtered: Long signal blocked in TRENDING_BEAR regime"
 
-        # Filter C: Higher-Timeframe Trend Bias Filter
-        if filters_passed:
+        # Filter C: Higher-Timeframe Trend Bias Filter (active during directional trend regimes)
+        reg_name = regime_state.regime.value if hasattr(regime_state.regime, "value") else str(regime_state.regime)
+        if filters_passed and "COMPRESSION" not in reg_name:
             if composite > self.entry_threshold and features.htf_bias < 0:
                 filters_passed = False
                 rejection_reason = "Filtered: Long signal opposes bearish HTF trend bias"
@@ -542,13 +538,9 @@ class MultiAlphaOrchestrator:
                 filters_passed = False
                 rejection_reason = "Filtered: Short signal opposes bullish HTF trend bias"
 
-        # Filter D: Low-Volatility Compression & Crisis Capital Preservation Gate
+        # Filter D: Crisis Capital Preservation Gate (Defense against systemic flash crashes)
         if filters_passed:
-            reg_name = regime_state.regime.value if hasattr(regime_state.regime, "value") else str(regime_state.regime)
-            if "COMPRESSION" in reg_name:
-                filters_passed = False
-                rejection_reason = "Filtered: Capital preserved in cash during LOW_VOL_COMPRESSION chop"
-            elif "CRISIS" in reg_name:
+            if "CRISIS" in reg_name:
                 filters_passed = False
                 rejection_reason = "Filtered: Defensive cash gate active during CRISIS volatility cascade"
 
