@@ -6,9 +6,13 @@ Production-grade multi-source market data layer supporting:
    Supports pagination for long historical windows (e.g., 2+ years of 1h/4h bars).
 2. Coinbase Public REST (Spot candles for major crypto pairs: BTC, ETH, SOL).
 3. Alpaca Market Data (US Equities SPY, QQQ + Crypto fallback via REST and WebSocket).
-4. Local on-disk persistent caching with multi-timeframe caching & freshness validation.
-5. Strict data cleaning and validation (monotonic ordering, deduplication, OHLC sanity bounds).
-6. Synthetic high-fidelity generator when operating offline or in isolated test mode.
+4. Perpetual Funding Rates: Real-time & historical funding rates from Binance & Bybit.
+5. Persistent Trade & Level-2 Snapshot Storage: SQLite & Parquet persistence.
+6. Latency-Aware Fill Model: Realistic execution simulation incorporating
+   half-spread crossing cost, square-root market impact, and execution latency penalty.
+7. Local on-disk persistent caching with multi-timeframe caching & freshness validation.
+8. Strict data cleaning and validation (monotonic ordering, deduplication, OHLC sanity bounds).
+9. Synthetic high-fidelity generator when operating offline or in isolated test mode.
 
 All bar timestamps are normalized to UTC ISO-8601 strings (YYYY-MM-DDTHH:MM:SSZ)
 with exact millisecond Unix epoch.
@@ -20,10 +24,12 @@ import json
 import time
 import math
 import random
+import sqlite3
 import logging
 from datetime import datetime, timezone, timedelta
 from typing import Dict, List, Optional, Any, Union, Tuple
 from dataclasses import dataclass, asdict
+from contextlib import contextmanager
 
 import requests
 
@@ -33,8 +39,13 @@ logger = logging.getLogger("data_layer")
 _BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
 _PROJECT_ROOT = os.path.abspath(os.path.join(_BACKEND_DIR, ".."))
 _CACHE_DIR = os.path.join(_PROJECT_ROOT, ".cache", "bars")
+_DB_PATH = os.path.join(_CACHE_DIR, "market_depth.db")
 os.makedirs(_CACHE_DIR, exist_ok=True)
 
+
+# ==============================================================================
+# Domain Data Models
+# ==============================================================================
 
 @dataclass
 class Bar:
@@ -54,6 +65,46 @@ class Bar:
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
 
+
+@dataclass
+class FundingRateRecord:
+    """Perpetual futures funding rate record."""
+    symbol: str               # Canonical slash format (e.g., BTC/USDT)
+    funding_rate: float       # Fractional 8h funding rate (e.g. 0.0001 = 0.01%)
+    annualized_rate: float    # Annualized funding rate (funding_rate * 3 * 365)
+    funding_time: str         # ISO 8601 UTC timestamp
+    epoch_ms: int             # Unix epoch in milliseconds
+    mark_price: float         # Perpetual mark price
+    source: str               # "binance", "bybit", or "synthetic"
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class FillResult:
+    """Detailed execution fill simulation outcome."""
+    symbol: str
+    side: str                     # "BUY" or "SELL"
+    order_size: float             # Nominal order size in base units
+    mid_price: float              # Pre-trade fair mid price
+    spread: float                 # Current BBO bid-ask spread
+    half_spread_cost: float       # Half-spread crossing cost (0 for passive maker)
+    impact_cost: float            # Square-root market impact
+    latency_penalty_cost: float   # Slippage drift incurred across execution latency
+    fill_price: float             # Final simulated execution price
+    slippage_bps: float           # Price divergence from mid in basis points
+    is_maker: bool                # True for passive limit, False for aggressive taker
+    latency_ms: float             # Simulated network/matching latency in milliseconds
+    timestamp: str                # Execution timestamp
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+# ==============================================================================
+# Symbol & Interval Normalization
+# ==============================================================================
 
 def normalize_symbol(symbol: str) -> str:
     """
@@ -85,6 +136,11 @@ def to_binance_symbol(symbol: str) -> str:
     if norm in ("BTC", "ETH", "SOL", "BNB"):
         return f"{norm}USDT"
     return norm
+
+
+def to_bybit_symbol(symbol: str) -> str:
+    """Convert standard symbol to Bybit linear symbol (e.g. BTCUSDT, ETHUSDT)."""
+    return to_binance_symbol(symbol)
 
 
 def to_coinbase_product(symbol: str) -> str:
@@ -174,10 +230,354 @@ def clean_and_validate_bars(bars: List[Bar]) -> List[Bar]:
     return cleaned
 
 
+# ==============================================================================
+# SQLite & Parquet Market Data Store (Trades, Order Books, Funding Rates)
+# ==============================================================================
+
+class MarketDataStore:
+    """
+    Persistent store for tick-level trades, Level-2 order book snapshots,
+    and perpetual funding rates with SQLite persistence and optional Parquet export.
+    """
+
+    def __init__(self, db_path: str = _DB_PATH):
+        self.db_path = db_path
+        self._init_db()
+
+    @contextmanager
+    def _get_connection(self):
+        conn = sqlite3.connect(self.db_path, timeout=10.0)
+        conn.row_factory = sqlite3.Row
+        try:
+            yield conn
+        finally:
+            conn.close()
+
+    def _init_db(self):
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            # 1. Market trades table
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS market_trades (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    symbol TEXT NOT NULL,
+                    timestamp TEXT NOT NULL,
+                    epoch_ms INTEGER NOT NULL,
+                    price REAL NOT NULL,
+                    size REAL NOT NULL,
+                    side TEXT NOT NULL,
+                    is_buyer_maker INTEGER DEFAULT 0
+                )
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_trades_sym_time ON market_trades(symbol, epoch_ms)")
+
+            # 2. Order book snapshots table
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS orderbook_snapshots (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    symbol TEXT NOT NULL,
+                    timestamp TEXT NOT NULL,
+                    epoch_ms INTEGER NOT NULL,
+                    mid_price REAL NOT NULL,
+                    spread REAL NOT NULL,
+                    depth_imbalance REAL NOT NULL,
+                    bid_volume REAL NOT NULL,
+                    ask_volume REAL NOT NULL,
+                    bids_json TEXT,
+                    asks_json TEXT
+                )
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_ob_sym_time ON orderbook_snapshots(symbol, epoch_ms)")
+
+            # 3. Perpetual funding rates table
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS funding_rates (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    symbol TEXT NOT NULL,
+                    timestamp TEXT NOT NULL,
+                    epoch_ms INTEGER NOT NULL,
+                    funding_rate REAL NOT NULL,
+                    annualized_rate REAL NOT NULL,
+                    mark_price REAL NOT NULL,
+                    source TEXT NOT NULL
+                )
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_fr_sym_time ON funding_rates(symbol, epoch_ms)")
+            conn.commit()
+
+    def persist_trade(
+        self,
+        symbol: str,
+        price: float,
+        size: float,
+        side: str,
+        timestamp: Optional[str] = None,
+        epoch_ms: Optional[int] = None,
+        is_buyer_maker: bool = False
+    ):
+        """Persists a single trade tick to SQLite."""
+        norm_sym = normalize_symbol(symbol)
+        now_epoch = epoch_ms or int(time.time() * 1000)
+        now_ts = timestamp or datetime.fromtimestamp(now_epoch / 1000.0, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        with self._get_connection() as conn:
+            conn.cursor().execute("""
+                INSERT INTO market_trades (symbol, timestamp, epoch_ms, price, size, side, is_buyer_maker)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (norm_sym, now_ts, now_epoch, float(price), float(size), side.upper(), 1 if is_buyer_maker else 0))
+            conn.commit()
+
+    def persist_trades_batch(self, trades: List[Dict[str, Any]]):
+        """Persists a batch of trade ticks in a single transaction."""
+        if not trades:
+            return
+        rows = []
+        for t in trades:
+            sym = normalize_symbol(t.get("symbol", "BTC/USDT"))
+            ep = t.get("epoch_ms", int(time.time() * 1000))
+            ts = t.get("timestamp", datetime.fromtimestamp(ep / 1000.0, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
+            rows.append((
+                sym, ts, ep,
+                float(t.get("price", 0.0)),
+                float(t.get("size", 0.0)),
+                str(t.get("side", "BUY")).upper(),
+                1 if t.get("is_buyer_maker", False) else 0
+            ))
+        with self._get_connection() as conn:
+            conn.cursor().executemany("""
+                INSERT INTO market_trades (symbol, timestamp, epoch_ms, price, size, side, is_buyer_maker)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, rows)
+            conn.commit()
+
+    def persist_orderbook_snapshot(self, snapshot: Dict[str, Any]):
+        """Persists Level 2 orderbook snapshot with depth and bids/asks JSON."""
+        sym = normalize_symbol(snapshot.get("symbol", "BTC/USDT"))
+        ep = snapshot.get("epoch_ms", int(time.time() * 1000))
+        ts = snapshot.get("timestamp", datetime.fromtimestamp(ep / 1000.0, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
+        bids_json = json.dumps(snapshot.get("bids", []))
+        asks_json = json.dumps(snapshot.get("asks", []))
+
+        with self._get_connection() as conn:
+            conn.cursor().execute("""
+                INSERT INTO orderbook_snapshots (
+                    symbol, timestamp, epoch_ms, mid_price, spread,
+                    depth_imbalance, bid_volume, ask_volume, bids_json, asks_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                sym, ts, ep,
+                float(snapshot.get("mid_price", 0.0)),
+                float(snapshot.get("spread", 0.0)),
+                float(snapshot.get("depth_imbalance", 0.0)),
+                float(snapshot.get("bid_volume", 0.0)),
+                float(snapshot.get("ask_volume", 0.0)),
+                bids_json, asks_json
+            ))
+            conn.commit()
+
+    def persist_funding_rate(self, record: FundingRateRecord):
+        """Persists funding rate record to SQLite."""
+        with self._get_connection() as conn:
+            conn.cursor().execute("""
+                INSERT INTO funding_rates (
+                    symbol, timestamp, epoch_ms, funding_rate,
+                    annualized_rate, mark_price, source
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (
+                record.symbol, record.funding_time, record.epoch_ms,
+                record.funding_rate, record.annualized_rate,
+                record.mark_price, record.source
+            ))
+            conn.commit()
+
+    def get_recent_trades(self, symbol: str, limit: int = 100) -> List[Dict[str, Any]]:
+        """Retrieves most recent trade ticks for a symbol."""
+        norm_sym = normalize_symbol(symbol)
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT symbol, timestamp, epoch_ms, price, size, side, is_buyer_maker
+                FROM market_trades
+                WHERE symbol = ?
+                ORDER BY epoch_ms DESC
+                LIMIT ?
+            """, (norm_sym, limit))
+            rows = cursor.fetchall()
+            return [dict(r) for r in reversed(rows)]
+
+    def get_recent_orderbook_snapshots(self, symbol: str, limit: int = 50) -> List[Dict[str, Any]]:
+        """Retrieves most recent L2 orderbook snapshots for a symbol."""
+        norm_sym = normalize_symbol(symbol)
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT symbol, timestamp, epoch_ms, mid_price, spread,
+                       depth_imbalance, bid_volume, ask_volume, bids_json, asks_json
+                FROM orderbook_snapshots
+                WHERE symbol = ?
+                ORDER BY epoch_ms DESC
+                LIMIT ?
+            """, (norm_sym, limit))
+            rows = cursor.fetchall()
+            results = []
+            for r in reversed(rows):
+                d = dict(r)
+                try:
+                    d["bids"] = json.loads(d["bids_json"]) if d["bids_json"] else []
+                    d["asks"] = json.loads(d["asks_json"]) if d["asks_json"] else []
+                except Exception:
+                    d["bids"], d["asks"] = [], []
+                results.append(d)
+            return results
+
+    def get_latest_funding_rate(self, symbol: str) -> Optional[FundingRateRecord]:
+        """Retrieves most recent persisted funding rate for a symbol."""
+        norm_sym = normalize_symbol(symbol)
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT symbol, timestamp, epoch_ms, funding_rate,
+                       annualized_rate, mark_price, source
+                FROM funding_rates
+                WHERE symbol = ?
+                ORDER BY epoch_ms DESC
+                LIMIT 1
+            """, (norm_sym,))
+            row = cursor.fetchone()
+            if row:
+                return FundingRateRecord(
+                    symbol=row["symbol"],
+                    funding_rate=float(row["funding_rate"]),
+                    annualized_rate=float(row["annualized_rate"]),
+                    funding_time=row["timestamp"],
+                    epoch_ms=int(row["epoch_ms"]),
+                    mark_price=float(row["mark_price"]),
+                    source=row["source"]
+                )
+        return None
+
+    def export_trades_parquet(self, symbol: str, output_path: Optional[str] = None) -> str:
+        """
+        Exports trades to Parquet file if pyarrow or pandas is available;
+        falls back to structured JSON export.
+        """
+        trades = self.get_recent_trades(symbol, limit=10000)
+        norm_clean = symbol.replace("/", "_").replace("-", "_")
+        target_path = output_path or os.path.join(_CACHE_DIR, f"{norm_clean}_trades.parquet")
+
+        try:
+            import pandas as pd
+            df = pd.DataFrame(trades)
+            df.to_parquet(target_path, index=False)
+            return target_path
+        except Exception:
+            # Fallback to json export
+            json_path = target_path.replace(".parquet", ".json")
+            with open(json_path, "w", encoding="utf-8") as f:
+                json.dump(trades, f, indent=2)
+            return json_path
+
+
+# ==============================================================================
+# Latency-Aware Fill Model (Spread + Market Impact + Latency Penalty)
+# ==============================================================================
+
+class LatencyAwareFillModel:
+    """
+    Institutional latency-aware execution simulation model:
+    Calculates realistic simulated fill prices for taker and maker orders:
+    
+    FillPrice = Mid +/- [ HalfSpread + MarketImpact + LatencyPenalty ]
+    
+    1. Half-Spread: spread / 2.0 for aggressive taker market orders (0 for maker).
+    2. Market Impact: Almgren-Chriss square-root law:
+       impact = gamma * mid_price * volatility * sqrt(order_size / (daily_volume + 1e-6))
+    3. Latency Penalty: Execution drift across network and matching latency:
+       drift = mid_price * (volatility / sqrt(86400 * 1000)) * sqrt(latency_ms) * 0.75
+    """
+
+    def __init__(self, default_gamma: float = 0.10, default_latency_ms: float = 45.0):
+        self.gamma = default_gamma
+        self.default_latency_ms = default_latency_ms
+
+    def simulate_fill(
+        self,
+        symbol: str,
+        side: str,
+        order_size: float,
+        mid_price: float,
+        spread: float,
+        daily_volume: float,
+        volatility: float = 0.35,
+        latency_ms: Optional[float] = None,
+        is_maker: bool = False,
+        seed: Optional[int] = None
+    ) -> FillResult:
+        """
+        Simulates realistic execution fill with spread crossing, square-root market impact,
+        and latency penalty slippage.
+        """
+        if seed is not None:
+            random.seed(seed)
+
+        norm_sym = normalize_symbol(symbol)
+        side_clean = side.upper()
+        eff_latency = latency_ms if latency_ms is not None else self.default_latency_ms
+        eff_spread = max(1e-4, spread)
+        eff_vol = max(0.05, volatility)
+        eff_daily_vol = max(100.0, daily_volume)
+
+        # 1. Spread cost
+        half_spread = 0.0 if is_maker else (eff_spread / 2.0)
+
+        # 2. Square-root market impact (Almgren-Chriss formulation)
+        participation = max(1e-7, order_size / eff_daily_vol)
+        impact = self.gamma * mid_price * eff_vol * math.sqrt(participation)
+
+        # 3. Latency penalty (stochastic adverse price drift across execution latency)
+        # Standard deviation of price move across latency_ms
+        vol_per_ms = eff_vol / math.sqrt(365.0 * 24.0 * 3600.0 * 1000.0)
+        expected_drift = mid_price * vol_per_ms * math.sqrt(eff_latency) * 0.75
+        jitter = random.uniform(0.6, 1.4)
+        latency_penalty = expected_drift * jitter
+
+        total_friction = half_spread + impact + latency_penalty
+
+        if side_clean == "BUY":
+            fill_price = mid_price + total_friction
+        else:
+            fill_price = max(0.01, mid_price - total_friction)
+
+        slippage_bps = abs(fill_price - mid_price) / mid_price * 10000.0
+        ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        return FillResult(
+            symbol=norm_sym,
+            side=side_clean,
+            order_size=round(order_size, 4),
+            mid_price=round(mid_price, 4),
+            spread=round(eff_spread, 4),
+            half_spread_cost=round(half_spread, 4),
+            impact_cost=round(impact, 4),
+            latency_penalty_cost=round(latency_penalty, 4),
+            fill_price=round(fill_price, 4),
+            slippage_bps=round(slippage_bps, 2),
+            is_maker=is_maker,
+            latency_ms=round(eff_latency, 2),
+            timestamp=ts
+        )
+
+
+# ==============================================================================
+# Master MarketDataClient
+# ==============================================================================
+
 class MarketDataClient:
     """
     Robust institutional market data client with automatic fallback across:
     Binance -> Coinbase -> Alpaca -> Cached disk bars -> Synthetic generator.
+    Also provides Bybit/Binance perpetual funding rates, SQLite/Parquet persistence,
+    and latency-aware execution simulation.
     """
 
     def __init__(self, cache_enabled: bool = True, request_timeout: int = 8):
@@ -187,6 +587,8 @@ class MarketDataClient:
         self.session.headers.update({
             "User-Agent": "DexAlgo-Institutional-Quant/2.0"
         })
+        self.store = MarketDataStore()
+        self.fill_model = LatencyAwareFillModel()
 
     def _get_cache_path(self, symbol: str, interval: str, limit: int) -> str:
         clean_sym = symbol.replace("/", "_").replace("-", "_")
@@ -208,8 +610,7 @@ class MarketDataClient:
         if os.path.exists(master_path):
             try:
                 mtime = os.path.getmtime(master_path)
-                # Master cache valid for 24 hours
-                if (time.time() - mtime) < 86400:
+                if (time.time() - mtime) < 86400:  # 24 hours
                     with open(master_path, "r", encoding="utf-8") as f:
                         data = json.load(f)
                         bars = [Bar(**item) for item in data]
@@ -252,7 +653,6 @@ class MarketDataClient:
                 with open(master_path, "r", encoding="utf-8") as f:
                     existing = [Bar(**item) for item in json.load(f)]
             merged = clean_and_validate_bars(existing + bars)
-            # Retain up to 25,000 bars in master cache (~3 years of 1h or 11 years of 4h)
             if len(merged) > 25000:
                 merged = merged[-25000:]
             with open(master_path, "w", encoding="utf-8") as f:
@@ -286,7 +686,6 @@ class MarketDataClient:
         target_limit = limit
         curr_end_time = end_time
 
-        # Binance caps per-request limit at 1000
         while len(all_bars) < target_limit:
             fetch_count = min(target_limit - len(all_bars), 1000)
             params: Dict[str, Any] = {
@@ -336,14 +735,13 @@ class MarketDataClient:
                     if not chunk:
                         break
 
-                    # If paginating backwards without explicit start_time
                     if target_limit > 1000 and not start_time:
                         all_bars = chunk + all_bars
                         earliest_epoch = chunk[0].epoch_ms
                         curr_end_time = earliest_epoch - 1
                         if len(chunk) < fetch_count:
                             break
-                        time.sleep(0.05)  # Respect rate limits
+                        time.sleep(0.05)
                     else:
                         all_bars.extend(chunk)
                         if len(chunk) < fetch_count:
@@ -384,7 +782,6 @@ class MarketDataClient:
             if resp.status_code == 200:
                 raw_data = resp.json()
                 bars: List[Bar] = []
-                # Coinbase returns newest first; reverse to chronological order
                 for row in reversed(raw_data):
                     epoch_s = int(row[0])
                     dt = datetime.fromtimestamp(epoch_s, tz=timezone.utc)
@@ -529,7 +926,177 @@ class MarketDataClient:
         return []
 
     # --------------------------------------------------------------------------
-    # 4. Realistic Synthetic Generator (Guaranteed Fallback)
+    # 4. Bybit & Binance Perpetual Funding Rates
+    # --------------------------------------------------------------------------
+    def fetch_binance_funding_rate(self, symbol: str = "BTC/USDT") -> Optional[FundingRateRecord]:
+        """
+        Fetches live perpetual funding rate from Binance Futures REST API:
+        GET https://fapi.binance.com/fapi/v1/premiumIndex?symbol=BTCUSDT
+        """
+        binance_sym = to_binance_symbol(symbol)
+        url = "https://fapi.binance.com/fapi/v1/premiumIndex"
+        params = {"symbol": binance_sym}
+
+        try:
+            resp = self.session.get(url, params=params, timeout=self.timeout)
+            if resp.status_code == 200:
+                data = resp.json()
+                rate = float(data.get("lastFundingRate", 0.0001))
+                mark_p = float(data.get("markPrice", 0.0))
+                funding_epoch = int(data.get("nextFundingTime", int(time.time() * 1000)))
+                funding_ts = datetime.fromtimestamp(funding_epoch / 1000.0, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+                record = FundingRateRecord(
+                    symbol=normalize_symbol(symbol),
+                    funding_rate=round(rate, 6),
+                    annualized_rate=round(rate * 3.0 * 365.0, 4),
+                    funding_time=funding_ts,
+                    epoch_ms=funding_epoch,
+                    mark_price=round(mark_p, 2),
+                    source="binance"
+                )
+                self.store.persist_funding_rate(record)
+                return record
+        except Exception as e:
+            logger.debug(f"Binance funding rate fetch failed for {symbol}: {e}")
+        return None
+
+    def fetch_bybit_funding_rate(self, symbol: str = "BTC/USDT") -> Optional[FundingRateRecord]:
+        """
+        Fetches live perpetual funding rate from Bybit v5 Market API:
+        GET https://api.bybit.com/v5/market/tickers?category=linear&symbol=BTCUSDT
+        """
+        bybit_sym = to_bybit_symbol(symbol)
+        url = "https://api.bybit.com/v5/market/tickers"
+        params = {"category": "linear", "symbol": bybit_sym}
+
+        try:
+            resp = self.session.get(url, params=params, timeout=self.timeout)
+            if resp.status_code == 200:
+                res_data = resp.json().get("result", {}).get("list", [])
+                if res_data:
+                    item = res_data[0]
+                    rate = float(item.get("fundingRate", 0.0001))
+                    mark_p = float(item.get("markPrice", 0.0))
+                    funding_epoch = int(item.get("nextFundingTime", int(time.time() * 1000)))
+                    funding_ts = datetime.fromtimestamp(funding_epoch / 1000.0, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+                    record = FundingRateRecord(
+                        symbol=normalize_symbol(symbol),
+                        funding_rate=round(rate, 6),
+                        annualized_rate=round(rate * 3.0 * 365.0, 4),
+                        funding_time=funding_ts,
+                        epoch_ms=funding_epoch,
+                        mark_price=round(mark_p, 2),
+                        source="bybit"
+                    )
+                    self.store.persist_funding_rate(record)
+                    return record
+        except Exception as e:
+            logger.debug(f"Bybit funding rate fetch failed for {symbol}: {e}")
+        return None
+
+    def fetch_funding_rate(self, symbol: str = "BTC/USDT") -> FundingRateRecord:
+        """
+        Unified funding rate fetcher with automatic fallback:
+        Binance -> Bybit -> SQLite Cache -> Synthetic baseline.
+        """
+        norm_sym = normalize_symbol(symbol)
+
+        # 1. Try Binance
+        rec = self.fetch_binance_funding_rate(norm_sym)
+        if rec:
+            return rec
+
+        # 2. Try Bybit
+        rec = self.fetch_bybit_funding_rate(norm_sym)
+        if rec:
+            return rec
+
+        # 3. Check local database cache
+        cached = self.store.get_latest_funding_rate(norm_sym)
+        if cached:
+            return cached
+
+        # 4. High-fidelity synthetic fallback
+        now = datetime.now(timezone.utc)
+        next_funding_epoch = int((now + timedelta(hours=8 - (now.hour % 8))).timestamp() * 1000)
+        ts = datetime.fromtimestamp(next_funding_epoch / 1000.0, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        base_rates = {"BTC/USDT": 0.0001, "ETH/USDT": 0.00008, "SOL/USDT": 0.00015}
+        base_rate = base_rates.get(norm_sym, 0.0001)
+        sim_rate = round(base_rate + (random.random() - 0.5) * 0.00005, 6)
+
+        base_px = 68000.0 if "BTC" in norm_sym else (3500.0 if "ETH" in norm_sym else 180.0)
+
+        record = FundingRateRecord(
+            symbol=norm_sym,
+            funding_rate=sim_rate,
+            annualized_rate=round(sim_rate * 3.0 * 365.0, 4),
+            funding_time=ts,
+            epoch_ms=next_funding_epoch,
+            mark_price=base_px,
+            source="synthetic"
+        )
+        self.store.persist_funding_rate(record)
+        return record
+
+    def fetch_historical_funding_rates(
+        self,
+        symbol: str = "BTC/USDT",
+        limit: int = 100
+    ) -> List[FundingRateRecord]:
+        """
+        Fetches historical funding rate history from Binance/Bybit.
+        """
+        binance_sym = to_binance_symbol(symbol)
+        url = "https://fapi.binance.com/fapi/v1/fundingRate"
+        params = {"symbol": binance_sym, "limit": min(limit, 1000)}
+
+        records: List[FundingRateRecord] = []
+        try:
+            resp = self.session.get(url, params=params, timeout=self.timeout)
+            if resp.status_code == 200:
+                data = resp.json()
+                for item in data:
+                    rate = float(item["fundingRate"])
+                    ep = int(item["fundingTime"])
+                    ts = datetime.fromtimestamp(ep / 1000.0, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                    rec = FundingRateRecord(
+                        symbol=normalize_symbol(symbol),
+                        funding_rate=round(rate, 6),
+                        annualized_rate=round(rate * 3.0 * 365.0, 4),
+                        funding_time=ts,
+                        epoch_ms=ep,
+                        mark_price=0.0,
+                        source="binance"
+                    )
+                    records.append(rec)
+                    self.store.persist_funding_rate(rec)
+                return records
+        except Exception as e:
+            logger.debug(f"Historical funding fetch failed: {e}")
+
+        # Synthetic historical series fallback
+        now = datetime.now(timezone.utc)
+        norm_sym = normalize_symbol(symbol)
+        for i in range(limit):
+            t = now - timedelta(hours=(limit - i) * 8)
+            ep = int(t.timestamp() * 1000)
+            rate = round(0.0001 + math.sin(i / 10.0) * 0.00008, 6)
+            records.append(FundingRateRecord(
+                symbol=norm_sym,
+                funding_rate=rate,
+                annualized_rate=round(rate * 3.0 * 365.0, 4),
+                funding_time=t.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                epoch_ms=ep,
+                mark_price=68000.0 if "BTC" in norm_sym else 3500.0,
+                source="synthetic"
+            ))
+        return records
+
+    # --------------------------------------------------------------------------
+    # 5. Realistic Synthetic Generator (Guaranteed Fallback)
     # --------------------------------------------------------------------------
     def generate_synthetic_bars(
         self,
@@ -581,7 +1148,6 @@ class MarketDataClient:
             # Regime simulation: alternating drift
             drift = 0.0002 * math.sin(i / 35.0)
             shock = random.gauss(0, bar_vol)
-            # Occasional jump shock (liquidity sweep)
             if random.random() < 0.03:
                 shock += random.choice([-2.2, 2.2]) * bar_vol
 
@@ -593,10 +1159,8 @@ class MarketDataClient:
             high_p = max(open_p, close_p) * (1.0 + intraday_range * random.uniform(0.3, 0.7))
             low_p = min(open_p, close_p) * (1.0 - intraday_range * random.uniform(0.3, 0.7))
 
-            # Realistic volume with spikes on high volatility
             vol_multiplier = 1.0 + (abs(pct_move) / bar_vol) * 1.5
             bar_volume = base_vol * vol_multiplier * random.uniform(0.7, 1.4)
-            # Taker buy proportion depends on close position relative to range
             bar_range = max(1e-5, high_p - low_p)
             close_loc = (close_p - low_p) / bar_range
             buy_ratio = max(0.15, min(0.85, close_loc + random.gauss(0, 0.08)))
@@ -624,7 +1188,7 @@ class MarketDataClient:
         return clean_and_validate_bars(bars)
 
     # --------------------------------------------------------------------------
-    # 5. Master Unified Historical Fetcher
+    # 6. Master Unified Historical Fetcher
     # --------------------------------------------------------------------------
     def get_historical_bars(
         self,
@@ -652,7 +1216,6 @@ class MarketDataClient:
         if any(c in norm for c in ("BTC", "ETH", "SOL", "USDT", "USD")):
             bars = self.fetch_binance_klines(symbol=norm, interval=norm_int, limit=limit)
             if not bars:
-                # Try Coinbase
                 gran_map = {"1m": 60, "5m": 300, "15m": 900, "1h": 3600, "4h": 21600, "1d": 86400}
                 gran = gran_map.get(norm_int, 3600)
                 bars = self.fetch_coinbase_candles(symbol=norm, granularity=gran)
@@ -689,6 +1252,34 @@ class MarketDataClient:
             self._save_to_cache(norm, norm_int, limit, bars)
 
         return bars[-limit:] if len(bars) > limit else bars
+
+    # --------------------------------------------------------------------------
+    # 7. Latency-Aware Execution Simulation Helper
+    # --------------------------------------------------------------------------
+    def simulate_fill(
+        self,
+        symbol: str,
+        side: str,
+        order_size: float,
+        mid_price: float,
+        spread: float,
+        daily_volume: float,
+        volatility: float = 0.35,
+        latency_ms: Optional[float] = None,
+        is_maker: bool = False
+    ) -> FillResult:
+        """Convenience accessor to the latency-aware fill model."""
+        return self.fill_model.simulate_fill(
+            symbol=symbol,
+            side=side,
+            order_size=order_size,
+            mid_price=mid_price,
+            spread=spread,
+            daily_volume=daily_volume,
+            volatility=volatility,
+            latency_ms=latency_ms,
+            is_maker=is_maker
+        )
 
 
 # Global singleton instance

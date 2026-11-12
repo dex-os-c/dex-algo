@@ -121,6 +121,8 @@ class CryptoOrderBook:
             "mid_price": self.mid_price,
             "bid_volume": self.bid_volume,
             "ask_volume": self.ask_volume,
+            "bid_depth": self.bid_volume,
+            "ask_depth": self.ask_volume,
             "depth_imbalance": self.depth_imbalance,
             "bids_list": [[b["price"], b["size"]] for b in self.bids],
             "asks_list": [[a["price"], a["size"]] for a in self.asks],

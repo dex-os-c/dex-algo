@@ -20,7 +20,8 @@ const state = {
   ws: null,
   pollTimer: null,
   reconnectAttempts: 0,
-  activeChartTab: 'strategy', // 'strategy' or 'equity'
+  activeChartTab: 'strategy', // 'strategy', 'equity', 'rolling'
+  activePositionView: 'heatmap', // 'heatmap' or 'table'
   selectedRange: '1D',
   autoScroll: true,
   logFilter: 'ALL',
@@ -37,23 +38,32 @@ const state = {
     volume_24h: 1845000000,
     vol_delta: 412.5,
     
-    // Market Regime Radar
-    regime: 'TRENDING BULL', // 'TRENDING BULL', 'RANGING CHOP', 'TRENDING BEAR', 'VOLATILITY EXPANSION'
+    // Market Regime Radar & 4-State Soft Probabilities
+    regime: 'TRENDING BULL', // 'TRENDING BULL', 'TRENDING BEAR', 'LOW_VOL_COMPRESSION', 'HIGH_VOL_BREAKOUT'
     adx: 32.4,
     di_plus: 28.5,
     di_minus: 14.2,
     bb_width_pct: 78.0,
     atr: 842.10,
+    parkinson_vol: 54.2,
+    yang_zhang_vol: 48.6,
+    hysteresis: '2-BAR LOCK',
+    probabilities: {
+      bull: 0.64,
+      bear: 0.06,
+      compression: 0.18,
+      breakout: 0.12
+    },
     strategy_weights: {
-      trend: 0.60,
+      trend: 0.65,
       mean_reversion: 0.10,
-      order_flow: 0.30
+      order_flow: 0.25
     },
 
     // Multi-Alpha Signal Matrix
     alphas: {
-      trend: 0.82,       // Alpha 1: HMA/Donchian
-      mean_rev: -0.14,   // Alpha 2: %B/VW-RSI
+      trend: 0.82,       // Alpha 1: Adaptive Trend (HMA/Donchian)
+      mean_rev: 0.00,    // Alpha 2: %B/2-Period RSI (Gated out in Bull trend)
       ofi: 0.68,         // Alpha 3: Order Flow Imbalance
       composite: 0.745,  // Composite Ensemble (-1.0 to +1.0)
       direction: 'BUY',  // 'BUY', 'SELL', 'NEUTRAL'
@@ -120,12 +130,16 @@ const state = {
   },
 
   // Historical Candles for Chart (Price, Bollinger Bands, Chandelier Stop)
-  strategyCandles: []
+  strategyCandles: [],
+  rollingMetricsData: []
 };
 
 // Chart.js instances
 let cryptoStrategyChart = null;
 let equityChart = null;
+let underwaterDdChart = null;
+let rollingMetricsChart = null;
+let alphaRadarChart = null;
 
 // Initialize on DOM Ready
 document.addEventListener('DOMContentLoaded', () => {

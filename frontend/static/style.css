@@ -1,4 +1,4 @@
-/* Alpaca Quant Terminal - Crypto Institutional Theme */
+/* Alpaca Quant Terminal - Crypto Institutional Theme v3.1 */
 
 :root {
   --bg-abyss: #070b14;
@@ -340,4 +340,103 @@ input[type=range]::-webkit-slider-thumb {
   cursor: pointer;
   box-shadow: 0 0 10px rgba(6, 182, 212, 0.6);
   border: 2px solid #0f172a;
+}
+
+/* Position Heat Map Cards */
+.heatmap-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  gap: 0.75rem;
+}
+
+.heatmap-card {
+  position: relative;
+  border-radius: 0.65rem;
+  padding: 0.75rem;
+  border: 1px solid var(--border-subtle);
+  background: rgba(15, 23, 42, 0.65);
+  backdrop-filter: blur(8px);
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  overflow: hidden;
+}
+
+.heatmap-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 20px -4px rgba(0, 0, 0, 0.5);
+}
+
+.heatmap-profit-high {
+  background: linear-gradient(135deg, rgba(16, 185, 129, 0.22) 0%, rgba(15, 23, 42, 0.75) 100%);
+  border-color: rgba(16, 185, 129, 0.55);
+  box-shadow: 0 0 18px -4px rgba(16, 185, 129, 0.3);
+}
+
+.heatmap-profit-low {
+  background: linear-gradient(135deg, rgba(16, 185, 129, 0.12) 0%, rgba(15, 23, 42, 0.75) 100%);
+  border-color: rgba(16, 185, 129, 0.35);
+}
+
+.heatmap-loss-high {
+  background: linear-gradient(135deg, rgba(244, 63, 94, 0.22) 0%, rgba(15, 23, 42, 0.75) 100%);
+  border-color: rgba(244, 63, 94, 0.55);
+  box-shadow: 0 0 18px -4px rgba(244, 63, 94, 0.3);
+}
+
+.heatmap-loss-low {
+  background: linear-gradient(135deg, rgba(244, 63, 94, 0.12) 0%, rgba(15, 23, 42, 0.75) 100%);
+  border-color: rgba(244, 63, 94, 0.35);
+}
+
+.heatmap-flat {
+  background: rgba(15, 23, 42, 0.6);
+  border-color: rgba(51, 65, 85, 0.6);
+}
+
+/* Soft Regime Probabilities Progress Bar */
+.prob-bar-container {
+  height: 6px;
+  border-radius: 9999px;
+  background: #1e293b;
+  overflow: hidden;
+  display: flex;
+}
+
+.prob-bar-bull {
+  background: #10b981;
+  transition: width 0.4s ease;
+}
+
+.prob-bar-bear {
+  background: #f43f5e;
+  transition: width 0.4s ease;
+}
+
+.prob-bar-compression {
+  background: #f59e0b;
+  transition: width 0.4s ease;
+}
+
+.prob-bar-breakout {
+  background: #06b6d4;
+  transition: width 0.4s ease;
+}
+
+/* Alpha Status Badges */
+.alpha-pill-active {
+  background: rgba(16, 185, 129, 0.15);
+  border: 1px solid rgba(16, 185, 129, 0.4);
+  color: #34d399;
+}
+
+.alpha-pill-gated {
+  background: rgba(100, 116, 139, 0.15);
+  border: 1px solid rgba(100, 116, 139, 0.3);
+  color: #94a3b8;
+}
+
+/* Interactive Radar Chart Container */
+.radar-chart-box {
+  position: relative;
+  width: 100%;
+  max-height: 220px;
 }

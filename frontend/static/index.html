@@ -199,36 +199,65 @@
           <div class="flex items-center justify-between pb-2.5 mb-3 border-b border-slate-800">
             <div class="flex items-center gap-2">
               <i data-lucide="radar" class="w-4 h-4 text-cyan-400"></i>
-              <h2 class="text-xs font-bold tracking-wider uppercase text-white">Market Regime Radar</h2>
+              <h2 class="text-xs font-bold tracking-wider uppercase text-white">Market Regime Radar &bull; 4-State Hysteresis</h2>
             </div>
             <!-- Large Glowing Status Badge -->
-            <div id="regime-badge" class="px-3 py-1 rounded-full text-xs font-bold tracking-wider regime-badge-bull flex items-center gap-1.5">
-              <span id="regime-radar-dot" class="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
-              <span id="regime-name">TRENDING BULL</span>
+            <div class="flex items-center gap-2">
+              <span id="regime-hysteresis-pill" class="hidden sm:inline-flex px-2 py-0.5 rounded text-[10px] font-mono font-medium bg-slate-800/80 text-slate-300 border border-slate-700/60" title="Stateful Hysteresis Confirmation">
+                2-BAR LOCK
+              </span>
+              <div id="regime-badge" class="px-3 py-1 rounded-full text-xs font-bold tracking-wider regime-badge-bull flex items-center gap-1.5">
+                <span id="regime-radar-dot" class="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
+                <span id="regime-name">TRENDING BULL</span>
+              </div>
             </div>
           </div>
 
-          <!-- Radar Diagnostics Grid -->
-          <div class="grid grid-cols-2 sm:grid-cols-4 gap-2.5 text-xs mb-3">
+          <!-- Radar Diagnostics Grid (5 metrics) -->
+          <div class="grid grid-cols-2 sm:grid-cols-5 gap-2 text-xs mb-3">
             <div class="p-2 rounded-lg bg-slate-950/60 border border-slate-800">
-              <div class="text-[10px] text-slate-400 uppercase font-medium">ADX (14) Trend</div>
-              <div id="regime-adx" class="text-base font-bold font-mono text-cyan-400 tabular-nums">32.4</div>
-              <div class="text-[9px] text-slate-500">Threshold &ge; 25</div>
+              <div class="text-[9px] text-slate-400 uppercase font-medium">ADX (14) Trend</div>
+              <div id="regime-adx" class="text-sm sm:text-base font-bold font-mono text-cyan-400 tabular-nums">32.4</div>
+              <div class="text-[8px] text-slate-500">&ge; 25 Trend</div>
             </div>
             <div class="p-2 rounded-lg bg-slate-950/60 border border-slate-800">
-              <div class="text-[10px] text-slate-400 uppercase font-medium">+DI vs -DI</div>
-              <div id="regime-di" class="text-base font-bold font-mono text-emerald-400 tabular-nums">28.5 / 14.2</div>
-              <div class="text-[9px] text-slate-500">Bullish Spread</div>
+              <div class="text-[9px] text-slate-400 uppercase font-medium">+DI vs -DI</div>
+              <div id="regime-di" class="text-sm sm:text-base font-bold font-mono text-emerald-400 tabular-nums">28.5 / 14.2</div>
+              <div class="text-[8px] text-slate-500">Spread</div>
             </div>
             <div class="p-2 rounded-lg bg-slate-950/60 border border-slate-800">
-              <div class="text-[10px] text-slate-400 uppercase font-medium">BB Width Pct</div>
-              <div id="regime-bbw" class="text-base font-bold font-mono text-amber-400 tabular-nums">78th Pct</div>
-              <div class="text-[9px] text-slate-500">Expanding Band</div>
+              <div class="text-[9px] text-slate-400 uppercase font-medium">BB Width Pct</div>
+              <div id="regime-bbw" class="text-sm sm:text-base font-bold font-mono text-amber-400 tabular-nums">78th Pct</div>
+              <div class="text-[8px] text-slate-500">Expansion</div>
             </div>
             <div class="p-2 rounded-lg bg-slate-950/60 border border-slate-800">
-              <div class="text-[10px] text-slate-400 uppercase font-medium">ATR Volatility</div>
-              <div id="regime-atr" class="text-base font-bold font-mono text-purple-400 tabular-nums">$842.10</div>
-              <div class="text-[9px] text-slate-500">91st Historical Pct</div>
+              <div class="text-[9px] text-slate-400 uppercase font-medium">Parkinson Vol</div>
+              <div id="regime-parkinson-vol" class="text-sm sm:text-base font-bold font-mono text-purple-400 tabular-nums">54.2%</div>
+              <div class="text-[8px] text-slate-500">High-Low Vol</div>
+            </div>
+            <div class="p-2 rounded-lg bg-slate-950/60 border border-slate-800 col-span-2 sm:col-span-1">
+              <div class="text-[9px] text-slate-400 uppercase font-medium">Yang-Zhang Vol</div>
+              <div id="regime-yz-vol" class="text-sm sm:text-base font-bold font-mono text-indigo-400 tabular-nums">48.6%</div>
+              <div class="text-[8px] text-slate-500">Drift-Free Vol</div>
+            </div>
+          </div>
+
+          <!-- Soft Regime Probabilities (Online Bayesian Soft Probabilities) -->
+          <div class="mb-3 p-2.5 rounded-lg bg-slate-950/70 border border-slate-800/80">
+            <div class="flex justify-between items-center text-[10px] uppercase font-semibold text-slate-400 mb-1.5">
+              <span>Soft Regime Probabilities:</span>
+              <div class="flex items-center gap-2 font-mono text-[10px]">
+                <span class="text-emerald-400">Bull: <b id="prob-val-bull">64%</b></span>
+                <span class="text-rose-400">Bear: <b id="prob-val-bear">6%</b></span>
+                <span class="text-amber-400">Comp: <b id="prob-val-comp">18%</b></span>
+                <span class="text-cyan-400">Brk: <b id="prob-val-brk">12%</b></span>
+              </div>
+            </div>
+            <div class="prob-bar-container w-full">
+              <div id="prob-bar-bull" class="prob-bar-bull" style="width: 64%;" title="Bullish Trend Probability"></div>
+              <div id="prob-bar-bear" class="prob-bar-bear" style="width: 6%;" title="Bearish Trend Probability"></div>
+              <div id="prob-bar-comp" class="prob-bar-compression" style="width: 18%;" title="Low Vol Compression Probability"></div>
+              <div id="prob-bar-brk" class="prob-bar-breakout" style="width: 12%;" title="High Vol Breakout Probability"></div>
             </div>
           </div>
 
@@ -236,24 +265,24 @@
           <div>
             <div class="flex justify-between text-[11px] text-slate-400 mb-1.5">
               <span>Dynamic Strategy Weight Allocation:</span>
-              <span id="regime-weights-label" class="font-mono text-slate-200">60% Trend | 10% MeanRev | 30% OFI</span>
+              <span id="regime-weights-label" class="font-mono text-slate-200">65% Trend | 10% MeanRev | 25% Breakout</span>
             </div>
             <div class="w-full h-2 rounded-full bg-slate-800 flex overflow-hidden">
-              <div id="bar-weight-trend" class="bg-cyan-500 h-full" style="width: 60%;" title="Trend Alpha Weight"></div>
-              <div id="bar-weight-mr" class="bg-amber-500 h-full" style="width: 10%;" title="Mean Reversion Weight"></div>
-              <div id="bar-weight-ofi" class="bg-emerald-500 h-full" style="width: 30%;" title="Order Flow Imbalance Weight"></div>
+              <div id="bar-weight-trend" class="bg-cyan-500 h-full transition-all duration-300" style="width: 65%;" title="Trend Alpha Weight"></div>
+              <div id="bar-weight-mr" class="bg-amber-500 h-full transition-all duration-300" style="width: 10%;" title="Mean Reversion Weight"></div>
+              <div id="bar-weight-ofi" class="bg-emerald-500 h-full transition-all duration-300" style="width: 25%;" title="Breakout/OFI Weight"></div>
             </div>
           </div>
         </div>
       </div>
 
-      <!-- 2. Multi-Alpha Signal Matrix Card -->
+      <!-- 2. Multi-Alpha Signal Matrix Card (With Alpha Radar Chart) -->
       <div id="multi-alpha-card" class="glass-panel p-4 flex flex-col justify-between relative overflow-hidden">
         <div>
-          <div class="flex items-center justify-between pb-2.5 mb-3 border-b border-slate-800">
+          <div class="flex items-center justify-between pb-2.5 mb-2.5 border-b border-slate-800">
             <div class="flex items-center gap-2">
               <i data-lucide="layers" class="w-4 h-4 text-emerald-400"></i>
-              <h2 class="text-xs font-bold tracking-wider uppercase text-white">Multi-Alpha Signal Matrix</h2>
+              <h2 class="text-xs font-bold tracking-wider uppercase text-white">Multi-Alpha Ensemble &bull; Radar &amp; Breakdown</h2>
             </div>
             <!-- Composite Signal Score & Direction -->
             <div class="flex items-center gap-2">
@@ -265,13 +294,37 @@
             </div>
           </div>
 
+          <!-- Top Half: Radar Chart & Metrics Split -->
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-2.5 items-center">
+            <!-- Radar Chart Box -->
+            <div class="radar-chart-box flex items-center justify-center h-[140px]">
+              <canvas id="alphaRadarChart"></canvas>
+            </div>
+
+            <!-- Alpha Weights Snapshot & Status Badges -->
+            <div class="space-y-1.5 text-[11px]">
+              <div class="p-2 rounded bg-slate-950/60 border border-slate-800/80 flex items-center justify-between">
+                <span class="text-slate-400">Alpha 1 (Trend):</span>
+                <span id="alpha-pill-1" class="px-1.5 py-0.5 rounded text-[10px] font-bold alpha-pill-active">ACTIVE (65%)</span>
+              </div>
+              <div class="p-2 rounded bg-slate-950/60 border border-slate-800/80 flex items-center justify-between">
+                <span class="text-slate-400">Alpha 2 (Mean-Rev):</span>
+                <span id="alpha-pill-2" class="px-1.5 py-0.5 rounded text-[10px] font-bold alpha-pill-gated">DORMANT (Gated)</span>
+              </div>
+              <div class="p-2 rounded bg-slate-950/60 border border-slate-800/80 flex items-center justify-between">
+                <span class="text-slate-400">Alpha 3 (Order Flow):</span>
+                <span id="alpha-pill-3" class="px-1.5 py-0.5 rounded text-[10px] font-bold alpha-pill-active">ACTIVE (25%)</span>
+              </div>
+            </div>
+          </div>
+
           <!-- 3 Institutional Alphas Gauges -->
-          <div class="space-y-2.5 text-xs">
+          <div class="space-y-2 text-xs">
             
             <!-- Alpha 1: Trend / Momentum (HMA + Donchian) -->
             <div>
-              <div class="flex justify-between items-center text-[11px] mb-1">
-                <span class="font-medium text-slate-300">Alpha 1: Adaptive Trend / Momentum (HMA/Donchian)</span>
+              <div class="flex justify-between items-center text-[10px] mb-0.5">
+                <span class="font-medium text-slate-300">Alpha 1: Adaptive Trend / Momentum (Donchian/SuperTrend)</span>
                 <span id="alpha-trend-val" class="font-mono font-bold text-emerald-400 tabular-nums">+0.82 (+82%)</span>
               </div>
               <div class="alpha-meter-track">
@@ -283,20 +336,20 @@
 
             <!-- Alpha 2: Mean Reversion (%B + VW-RSI) -->
             <div>
-              <div class="flex justify-between items-center text-[11px] mb-1">
-                <span class="font-medium text-slate-300">Alpha 2: Mean Reversion (%B &amp; VW-RSI)</span>
-                <span id="alpha-mr-val" class="font-mono font-bold text-amber-400 tabular-nums">-0.14 (-14%)</span>
+              <div class="flex justify-between items-center text-[10px] mb-0.5">
+                <span class="font-medium text-slate-300">Alpha 2: Squeeze Mean-Reversion (%B &amp; 2-Period RSI)</span>
+                <span id="alpha-mr-val" class="font-mono font-bold text-amber-400 tabular-nums">0.00 (0%)</span>
               </div>
               <div class="alpha-meter-track">
                 <div class="alpha-meter-center"></div>
                 <div id="alpha-mr-bar-pos" class="alpha-meter-fill-pos" style="width: 0%;"></div>
-                <div id="alpha-mr-bar-neg" class="alpha-meter-fill-neg" style="width: 7%;"></div>
+                <div id="alpha-mr-bar-neg" class="alpha-meter-fill-neg" style="width: 0%;"></div>
               </div>
             </div>
 
             <!-- Alpha 3: Microstructure & Order Flow Imbalance (OFI) -->
             <div>
-              <div class="flex justify-between items-center text-[11px] mb-1">
+              <div class="flex justify-between items-center text-[10px] mb-0.5">
                 <span class="font-medium text-slate-300">Alpha 3: Order Flow Imbalance &amp; Volume Delta</span>
                 <span id="alpha-ofi-val" class="font-mono font-bold text-cyan-400 tabular-nums">+0.68 (+68%)</span>
               </div>
@@ -309,9 +362,9 @@
 
           </div>
 
-          <div class="mt-3 pt-2 border-t border-slate-800/80 flex items-center justify-between text-[11px] text-slate-400">
+          <div class="mt-2.5 pt-2 border-t border-slate-800/80 flex items-center justify-between text-[11px] text-slate-400">
             <span>Ensemble Confidence: <span id="composite-confidence" class="text-slate-200 font-bold font-mono">86.4%</span></span>
-            <span class="text-slate-500">Sizing: <span class="text-cyan-400 font-mono">Fractional Kelly Scaled</span></span>
+            <span class="text-slate-500">Sizing: <span class="text-cyan-400 font-mono font-medium">Bayesian Half-Kelly ($f^*$)</span></span>
           </div>
         </div>
       </div>
@@ -437,14 +490,18 @@
         <div class="flex flex-wrap items-center justify-between gap-3 mb-3">
           
           <!-- View Switcher Tabs -->
-          <div class="flex items-center bg-slate-950/90 p-1 rounded-lg border border-slate-800 text-xs">
+          <div class="flex flex-wrap items-center bg-slate-950/90 p-1 rounded-lg border border-slate-800 text-xs gap-1">
             <button id="tab-chart-strategy" class="chart-tab active px-3 py-1 rounded font-semibold bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 transition flex items-center gap-1.5">
               <i data-lucide="trending-up" class="w-3.5 h-3.5"></i>
-              <span>BTC/USD Strategy &bull; Bollinger + Chandelier Stop</span>
+              <span>BTC/USD Strategy &bull; Chandelier Stop</span>
             </button>
             <button id="tab-chart-equity" class="chart-tab px-3 py-1 rounded font-medium text-slate-400 hover:text-white transition flex items-center gap-1.5">
               <i data-lucide="line-chart" class="w-3.5 h-3.5"></i>
               <span>Portfolio Equity &amp; Underwater DD</span>
+            </button>
+            <button id="tab-chart-rolling" class="chart-tab px-3 py-1 rounded font-medium text-slate-400 hover:text-white transition flex items-center gap-1.5">
+              <i data-lucide="activity" class="w-3.5 h-3.5"></i>
+              <span>Rolling Sharpe / Sortino / DD</span>
             </button>
           </div>
 
@@ -464,20 +521,30 @@
           <canvas id="cryptoStrategyChart"></canvas>
         </div>
 
-        <!-- Equity Chart Container (Hidden by default, shown via Tab) -->
-        <div id="container-equity-chart" class="relative w-full h-[320px] hidden">
-          <canvas id="equityChart"></canvas>
+        <!-- Equity & Underwater Drawdown Chart Container -->
+        <div id="container-equity-chart" class="relative w-full h-[320px] hidden flex-col gap-2">
+          <div class="h-[210px] w-full">
+            <canvas id="equityChart"></canvas>
+          </div>
+          <div class="h-[100px] w-full pt-1 border-t border-slate-800/60">
+            <canvas id="underwaterDdChart"></canvas>
+          </div>
+        </div>
+
+        <!-- Rolling Risk Metrics Chart Container (Sharpe, Sortino, Drawdown) -->
+        <div id="container-rolling-chart" class="relative w-full h-[320px] hidden">
+          <canvas id="rollingMetricsChart"></canvas>
         </div>
 
         <!-- Legend / Indicators Sub-bar -->
         <div class="mt-2 pt-2 border-t border-slate-800/80 flex flex-wrap items-center justify-between text-[11px] text-slate-400">
-          <div class="flex flex-wrap items-center gap-3">
+          <div id="chart-legend-strategy" class="flex flex-wrap items-center gap-3">
             <span class="flex items-center gap-1.5"><span class="w-2.5 h-0.5 bg-cyan-400"></span> BTC Price</span>
-            <span class="flex items-center gap-1.5"><span class="w-2.5 h-0.5 bg-amber-400 border-b border-dashed"></span> Bollinger Upper/Lower</span>
-            <span class="flex items-center gap-1.5"><span class="w-2.5 h-0.5 bg-emerald-400"></span> Chandelier Trailing Stop</span>
+            <span class="flex items-center gap-1.5"><span class="w-2.5 h-0.5 bg-amber-400 border-b border-dashed"></span> Bollinger Bands</span>
+            <span class="flex items-center gap-1.5"><span class="w-2.5 h-0.5 bg-emerald-400"></span> Monotonic Chandelier Stop</span>
             <span class="flex items-center gap-1.5"><span class="w-2.5 h-0.5 bg-indigo-400"></span> EMA(50) Trend Baseline</span>
           </div>
-          <span class="text-slate-500">Live Tick Updating Every 1s</span>
+          <span class="text-slate-500 font-mono text-[10px]">Real-Time Feed &bull; Sub-second Updates</span>
         </div>
       </div>
 
@@ -544,21 +611,36 @@
     <!-- LIVE TABLES: Active Positions & Executed Trades -->
     <section class="grid grid-cols-1 lg:grid-cols-2 gap-4">
       
-      <!-- Active Positions Card -->
+      <!-- Active Positions Card (With Heat Map & Table Switcher) -->
       <div class="glass-panel p-4 flex flex-col">
         <div class="flex items-center justify-between mb-3 pb-2.5 border-b border-slate-800">
           <div class="flex items-center gap-2">
             <i data-lucide="shield" class="w-4 h-4 text-emerald-400"></i>
-            <h2 class="text-xs font-bold tracking-wider uppercase text-white">Active Crypto Positions</h2>
+            <h2 class="text-xs font-bold tracking-wider uppercase text-white">Position Heat Map &amp; Exposure</h2>
             <span id="positions-count-badge" class="px-2 py-0.2 rounded-full text-[10px] font-bold bg-slate-800 text-slate-300 border border-slate-700">0</span>
           </div>
-          <div class="text-xs text-slate-400">
-            Total Exposure: <span id="positions-total-value" class="text-slate-200 font-semibold tabular-nums">$0.00</span>
+
+          <!-- Heatmap vs Table Toggle & Exposure -->
+          <div class="flex items-center gap-3">
+            <div class="flex items-center bg-slate-950 p-0.5 rounded-lg border border-slate-800 text-[10px]">
+              <button id="btn-view-heatmap" class="px-2 py-0.5 rounded font-semibold bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 transition">Heat Map</button>
+              <button id="btn-view-table" class="px-2 py-0.5 rounded font-medium text-slate-400 hover:text-white transition">Table</button>
+            </div>
+            <div class="text-xs text-slate-400 hidden sm:block">
+              Exposure: <span id="positions-total-value" class="text-slate-200 font-semibold tabular-nums">$0.00</span>
+            </div>
           </div>
         </div>
 
-        <!-- Table Container -->
-        <div class="overflow-x-auto flex-1 max-h-[300px]">
+        <!-- Heat Map View Container -->
+        <div id="container-positions-heatmap" class="flex-1 max-h-[300px] overflow-y-auto">
+          <div id="positions-heatmap-grid" class="heatmap-grid py-1">
+            <!-- Dynamically populated heat map tiles -->
+          </div>
+        </div>
+
+        <!-- Table Container (Hidden by default, shown via toggle) -->
+        <div id="container-positions-table" class="overflow-x-auto flex-1 max-h-[300px] hidden">
           <table class="w-full text-left text-xs border-collapse">
             <thead>
               <tr class="text-slate-400 border-b border-slate-800 sticky top-0 bg-slate-900/95 backdrop-blur z-10 text-[11px]">

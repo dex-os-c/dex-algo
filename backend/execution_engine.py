@@ -1944,9 +1944,7 @@ class ExecutionEngine:
         return self.execute_crypto_cycle()
 
     def get_crypto_state(self, symbol: Optional[str] = None) -> Dict[str, Any]:
-        if not self.last_crypto_state:
-            return self.execute_crypto_cycle(symbol)
-        return self.last_crypto_state
+        return self.last_crypto_state or {}
 
     # ==========================================================================
     # Multi-Asset Execution Cycle (Equities + Crypto)

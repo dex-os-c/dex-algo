@@ -141,7 +141,8 @@ class TestRegimeClassification(unittest.TestCase):
                 MarketRegime.TRENDING_BULL,
                 MarketRegime.TRENDING_BEAR,
                 MarketRegime.LOW_VOL_COMPRESSION,
-                MarketRegime.HIGH_VOL_BREAKOUT
+                MarketRegime.HIGH_VOL_BREAKOUT,
+                MarketRegime.CRISIS
             ])
             # Verify dynamic weights sum to ~1.0
             total_w = sum(st.active_weights.values())

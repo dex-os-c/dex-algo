@@ -11,6 +11,9 @@ Tests:
 7. Alpaca equities (SPY, QQQ) & crypto fallback.
 8. Synthetic fallback generator integrity.
 9. 24/7 CryptoMarketFeed: quotes, order book depth, taker volume delta, OFI, and websocket streaming.
+10. Bybit & Binance perpetual funding rates (real-time & historical).
+11. SQLite trade & Level-2 order book snapshot persistence.
+12. Latency-aware fill model (spread, market impact, latency penalty).
 """
 
 import os
@@ -25,11 +28,16 @@ if BACKEND_DIR not in sys.path:
 
 from data_layer import (
     Bar,
+    FundingRateRecord,
+    FillResult,
     MarketDataClient,
+    MarketDataStore,
+    LatencyAwareFillModel,
     get_data_client,
     normalize_symbol,
     normalize_interval,
     to_binance_symbol,
+    to_bybit_symbol,
     to_coinbase_product,
     to_alpaca_symbol,
     clean_and_validate_bars
@@ -72,6 +80,7 @@ class TestDataFeedLayer(unittest.TestCase):
         self.assertEqual(to_binance_symbol("SOL/USDT"), "SOLUSDT")
         self.assertEqual(to_binance_symbol("BTC/USD"), "BTCUSDT")
 
+        self.assertEqual(to_bybit_symbol("BTC/USDT"), "BTCUSDT")
         self.assertEqual(to_coinbase_product("BTC/USDT"), "BTC-USD")
         self.assertEqual(to_coinbase_product("ETH/USDT"), "ETH-USD")
         self.assertEqual(to_coinbase_product("SOL/USDT"), "SOL-USD")
@@ -155,6 +164,123 @@ class TestDataFeedLayer(unittest.TestCase):
 
             snapshot = feed.get_microstructure_snapshot(sym)
             self.assertEqual(snapshot["symbol"], normalize_crypto_symbol(sym))
+
+    def test_perpetual_funding_rates(self):
+        # Test unified funding rate fetcher
+        for sym in ["BTC/USDT", "ETH/USDT", "SOL/USDT"]:
+            fr = self.client.fetch_funding_rate(sym)
+            self.assertIsInstance(fr, FundingRateRecord)
+            self.assertEqual(fr.symbol, sym)
+            self.assertIsInstance(fr.funding_rate, float)
+            self.assertIsInstance(fr.annualized_rate, float)
+            self.assertGreater(fr.epoch_ms, 0)
+            self.assertIn(fr.source, ["binance", "bybit", "synthetic"])
+
+        # Test historical funding rate retrieval
+        hist = self.client.fetch_historical_funding_rates("BTC/USDT", limit=10)
+        self.assertGreaterEqual(len(hist), 10)
+        self.assertTrue(all(isinstance(h, FundingRateRecord) for h in hist))
+
+    def test_sqlite_market_data_store(self):
+        store = MarketDataStore()
+        # Test trade persistence
+        store.persist_trade(
+            symbol="BTC/USDT",
+            price=68500.50,
+            size=0.25,
+            side="BUY",
+            is_buyer_maker=False
+        )
+        recent = store.get_recent_trades("BTC/USDT", limit=5)
+        self.assertGreaterEqual(len(recent), 1)
+        self.assertEqual(recent[-1]["symbol"], "BTC/USDT")
+        self.assertEqual(recent[-1]["price"], 68500.50)
+        self.assertEqual(recent[-1]["side"], "BUY")
+
+        # Test L2 orderbook snapshot persistence
+        ob_snapshot = {
+            "symbol": "BTC/USDT",
+            "mid_price": 68500.0,
+            "spread": 1.50,
+            "depth_imbalance": 0.12,
+            "bid_volume": 15.5,
+            "ask_volume": 12.2,
+            "bids": [{"price": 68499.25, "size": 1.5}],
+            "asks": [{"price": 68500.75, "size": 1.2}]
+        }
+        store.persist_orderbook_snapshot(ob_snapshot)
+        recent_obs = store.get_recent_orderbook_snapshots("BTC/USDT", limit=5)
+        self.assertGreaterEqual(len(recent_obs), 1)
+        self.assertEqual(recent_obs[-1]["mid_price"], 68500.0)
+        self.assertEqual(len(recent_obs[-1]["bids"]), 1)
+
+        # Test Parquet / JSON export
+        export_file = store.export_trades_parquet("BTC/USDT")
+        self.assertTrue(os.path.exists(export_file))
+
+    def test_latency_aware_fill_model(self):
+        model = LatencyAwareFillModel(default_gamma=0.10, default_latency_ms=50.0)
+
+        # 1. Taker Buy Fill (Mid + HalfSpread + Impact + LatencyPenalty)
+        res_buy = model.simulate_fill(
+            symbol="BTC/USDT",
+            side="BUY",
+            order_size=2.0,
+            mid_price=68000.0,
+            spread=2.0,
+            daily_volume=10000.0,
+            volatility=0.40,
+            latency_ms=50.0,
+            is_maker=False,
+            seed=42
+        )
+        self.assertGreater(res_buy.fill_price, res_buy.mid_price, "Taker BUY executes above mid")
+        self.assertGreater(res_buy.half_spread_cost, 0.0)
+        self.assertGreater(res_buy.impact_cost, 0.0)
+        self.assertGreater(res_buy.latency_penalty_cost, 0.0)
+        self.assertGreater(res_buy.slippage_bps, 0.0)
+
+        # 2. Taker Sell Fill (Mid - HalfSpread - Impact - LatencyPenalty)
+        res_sell = model.simulate_fill(
+            symbol="BTC/USDT",
+            side="SELL",
+            order_size=2.0,
+            mid_price=68000.0,
+            spread=2.0,
+            daily_volume=10000.0,
+            volatility=0.40,
+            latency_ms=50.0,
+            is_maker=False,
+            seed=42
+        )
+        self.assertLess(res_sell.fill_price, res_sell.mid_price, "Taker SELL executes below mid")
+
+        # 3. Passive Maker Fill (Zero half-spread cost)
+        res_maker = model.simulate_fill(
+            symbol="BTC/USDT",
+            side="BUY",
+            order_size=1.0,
+            mid_price=68000.0,
+            spread=2.0,
+            daily_volume=10000.0,
+            is_maker=True
+        )
+        self.assertEqual(res_maker.half_spread_cost, 0.0, "Maker has zero spread cost")
+
+        # 4. Square-root market impact scaling
+        res_small = model.simulate_fill("BTC/USDT", "BUY", order_size=0.5, mid_price=68000.0,
+                                        spread=1.0, daily_volume=10000.0)
+        res_large = model.simulate_fill("BTC/USDT", "BUY", order_size=50.0, mid_price=68000.0,
+                                        spread=1.0, daily_volume=10000.0)
+        self.assertGreater(res_large.impact_cost, res_small.impact_cost, "Larger order size has higher impact")
+
+        # 5. Latency penalty scaling
+        res_fast = model.simulate_fill("BTC/USDT", "BUY", order_size=1.0, mid_price=68000.0,
+                                       spread=1.0, daily_volume=10000.0, latency_ms=10.0, seed=10)
+        res_slow = model.simulate_fill("BTC/USDT", "BUY", order_size=1.0, mid_price=68000.0,
+                                       spread=1.0, daily_volume=10000.0, latency_ms=250.0, seed=10)
+        self.assertGreater(res_slow.latency_penalty_cost, res_fast.latency_penalty_cost,
+                           "Higher latency incurs greater adverse price drift penalty")
 
 
 if __name__ == "__main__":

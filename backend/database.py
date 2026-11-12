@@ -1178,6 +1178,8 @@ def get_latest_walk_forward_metrics(
         except Exception:
             item["metadata"] = {}
     item["is_overfit"] = bool(item.get("is_overfit", 0))
+    if "max_drawdown" not in item:
+        item["max_drawdown"] = item.get("max_drawdown_pct", 0.0)
     return item
 
 
@@ -1207,6 +1209,8 @@ def get_all_walk_forward_metrics(
             except Exception:
                 item["monte_carlo"] = {}
         item["is_overfit"] = bool(item.get("is_overfit", 0))
+        if "max_drawdown" not in item:
+            item["max_drawdown"] = item.get("max_drawdown_pct", 0.0)
         rows.append(item)
     return rows
 
