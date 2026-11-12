@@ -57,7 +57,7 @@ class ConfigUpdateRequest(BaseModel):
 
 async def broadcast_ws(message: Dict[str, Any]):
     dead_sockets = []
-    payload = json.dumps(message)
+    payload = database.safe_json_dumps(message)
     for ws in connected_websockets:
         try:
             await ws.send_text(payload)
@@ -757,6 +757,16 @@ def get_walkforward_backtest(
         }
     except Exception as e:
         return {"status": "error", "message": str(e)}
+
+
+@app.get("/api/backtest/report")
+def get_persisted_report():
+    """Returns the precomputed multi-asset walk-forward and Monte Carlo suite results."""
+    report_file = os.path.join(CURRENT_DIR, "walkforward_report.json")
+    if os.path.exists(report_file):
+        with open(report_file, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return {"status": "not_found", "message": "Run scripts/generate_walk_forward_report.py first"}
 
 
 # =====================================================================

@@ -252,6 +252,12 @@ class MultiAlphaOrchestrator:
                 filters_passed = False
                 rejection_reason = "Filtered: Short signal opposes bullish HTF trend bias"
 
+        # Filter D: Low-Volatility Compression Capital Preservation Gate
+        # In LOW_VOL_COMPRESSION, do not trade; stay 100% in cash to eliminate fee drag and chop
+        if filters_passed and regime_state.regime == MarketRegime.LOW_VOL_COMPRESSION:
+            filters_passed = False
+            rejection_reason = "Filtered: Capital preserved in cash during LOW_VOL_COMPRESSION chop"
+
         # 5. Determine Action
         action = SignalAction.HOLD
         if filters_passed:

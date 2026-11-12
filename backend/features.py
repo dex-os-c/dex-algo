@@ -21,7 +21,7 @@ Calculates causal, strictly lag-1 shifted quantitative features:
 """
 
 import math
-from typing import List, Dict, Any, Optional, Tuple
+from typing import List, Dict, Any, Optional, Tuple, Union
 from dataclasses import dataclass, asdict
 import numpy as np
 
@@ -136,17 +136,22 @@ def calculate_yang_zhang_volatility(
 
     # 2. Open-to-close variance: ln(Close_i / Open_i)
     c_list = [math.log(c / o) for c, o in zip(recent_c, recent_o) if c > 0 and o > 0]
+    if len(c_list) < 2:
+        return 0.0
     c_mean = sum(c_list) / len(c_list)
     sigma_close_sq = sum((c - c_mean) ** 2 for c in c_list) / (len(c_list) - 1)
 
-    # 3. Rogers-Satchell variance:
+    # 3. Rogers-Satchell variance (drift-independent):
     # RS_i = ln(H/C)*ln(H/O) + ln(L/C)*ln(L/O)
     rs_list = []
     for o, h, l, c in zip(recent_o, recent_h, recent_l, recent_c):
         if min(o, h, l, c) <= 0:
             continue
-        rs = (math.log(h / c) * math.log(h / o)) + (math.log(l / c) * math.log(l / o))
-        rs_list.append(rs)
+        # Protect against minor tick jitter where H < max(O,C) or L > min(O,C)
+        h_adj = max(h, o, c)
+        l_adj = min(l, o, c)
+        rs = (math.log(h_adj / c) * math.log(h_adj / o)) + (math.log(l_adj / c) * math.log(l_adj / o))
+        rs_list.append(max(0.0, rs))
 
     if not rs_list:
         return 0.0
@@ -154,6 +159,8 @@ def calculate_yang_zhang_volatility(
 
     # 4. Weighting constant k
     N = float(len(u_list))
+    if N <= 1.0:
+        return 0.0
     k = 0.34 / (1.34 + (N + 1.0) / (N - 1.0))
 
     yz_var = sigma_open_sq + (k * sigma_close_sq) + ((1.0 - k) * sigma_rs_sq)

@@ -22,16 +22,16 @@ from backtester_v2 import InstitutionalBacktester, PerformanceMetrics
 def run_full_suite():
     client = get_data_client()
     symbols = [
-        ("BTC/USDT", True, 500, "1h"),
-        ("ETH/USDT", True, 500, "1h"),
-        ("SOL/USDT", True, 500, "1h"),
-        ("SPY", False, 500, "1h")
+        ("BTC/USDT", True, 3000, "4h"),
+        ("ETH/USDT", True, 3000, "4h"),
+        ("SOL/USDT", True, 3000, "4h"),
+        ("SPY", False, 1500, "1h")
     ]
 
     bt = InstitutionalBacktester(
         initial_capital=100000.0,
-        fee_rate=0.0006,        # 6 bps taker fee
-        base_slippage=0.0002,   # 2 bps base half-spread
+        fee_rate=0.0008,        # Aggressive 8 bps taker fee
+        base_slippage=0.0003,   # 3 bps base half-spread
         slippage_impact_gamma=0.05
     )
 
@@ -43,7 +43,7 @@ def run_full_suite():
         print(f"  Bars loaded: {len(bars)}")
 
         trades, eq_curve, metrics = bt.run_simulation(bars, symbol=sym, is_crypto=is_crypto)
-        wf_res = bt.run_walk_forward(bars, symbol=sym, train_bars=220, test_bars=70, embargo_bars=10, is_crypto=is_crypto)
+        wf_res = bt.run_walk_forward(bars, symbol=sym, train_bars=800, test_bars=250, embargo_bars=20, is_crypto=is_crypto)
         mc_res = bt.run_monte_carlo_simulation(trades, num_simulations=1000) if trades else {}
 
         report_data.append({

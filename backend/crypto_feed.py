@@ -158,15 +158,19 @@ class OrderFlowImbalance:
 
 def normalize_crypto_symbol(symbol: str) -> str:
     """
-    Normalizes variations like 'BTCUSD', 'btc/usd', 'BTC/USD' to canonical 'BTC/USD'.
+    Normalizes crypto symbols to canonical slash format:
+    BTC/USDT, ETH/USDT, SOL/USDT, BTC/USD, ETH/USD, SOL/USD.
     """
-    clean = symbol.strip().upper()
+    clean = symbol.strip().upper().replace("-", "/").replace("_", "/")
     if "/" in clean:
-        return clean
+        parts = clean.split("/")
+        return f"{parts[0]}/{parts[1]}"
+    if clean.endswith("USDT") and len(clean) > 4:
+        return f"{clean[:-4]}/USDT"
     if clean.endswith("USD") and len(clean) > 3:
         return f"{clean[:-3]}/USD"
-    if clean.endswith("USDT") and len(clean) > 4:
-        return f"{clean[:-4]}/USD"
+    if clean in ("BTC", "ETH", "SOL"):
+        return f"{clean}/USDT"
     return clean
 
 
@@ -178,8 +182,9 @@ class SyntheticCryptoGenerator:
     """
     High-fidelity crypto microstructure generator.
     Simulates realistic 24/7 continuous trading dynamics:
-    - BTC/USD realistic minute bars with target ATR between $400 and $1,200.
-    - ETH/USD realistic minute bars with target ATR between $30 and $90.
+    - BTC/USDT & BTC/USD realistic minute bars with target ATR between $400 and $1,200.
+    - ETH/USDT & ETH/USD realistic minute bars with target ATR between $30 and $90.
+    - SOL/USDT & SOL/USD realistic minute bars with target ATR between $2.0 and $8.0.
     - Full Level 2 Order Book depth (top 10 levels with realistic liquidity walls).
     - Tick-by-tick Order Flow Imbalance (OFI) based on Cont-Kukanov-Stoikov (2014).
     - Taker Buy vs Taker Sell Volume Delta & Cumulative Volume Delta (CVD).
@@ -187,37 +192,59 @@ class SyntheticCryptoGenerator:
 
     def __init__(self):
         self._lock = threading.Lock()
+        btc_cfg = {
+            "base_price": 67850.0,
+            "current_price": 67850.0,
+            "min_atr": 400.0,
+            "max_atr": 1200.0,
+            "target_atr": 680.0,
+            "tick_size": 0.50,
+            "spread_range": (0.50, 2.50),
+            "level_step": 1.50,
+            "avg_level_size": 1.25,
+            "avg_bar_volume": 42.0,
+            "cvd": 0.0,
+            "prev_bbo": None,
+            "prev_ofi": 0.0,
+        }
+        eth_cfg = {
+            "base_price": 3450.0,
+            "current_price": 3450.0,
+            "min_atr": 30.0,
+            "max_atr": 90.0,
+            "target_atr": 52.0,
+            "tick_size": 0.05,
+            "spread_range": (0.10, 0.60),
+            "level_step": 0.25,
+            "avg_level_size": 18.0,
+            "avg_bar_volume": 380.0,
+            "cvd": 0.0,
+            "prev_bbo": None,
+            "prev_ofi": 0.0,
+        }
+        sol_cfg = {
+            "base_price": 182.50,
+            "current_price": 182.50,
+            "min_atr": 2.0,
+            "max_atr": 8.0,
+            "target_atr": 4.5,
+            "tick_size": 0.01,
+            "spread_range": (0.02, 0.15),
+            "level_step": 0.10,
+            "avg_level_size": 120.0,
+            "avg_bar_volume": 1200.0,
+            "cvd": 0.0,
+            "prev_bbo": None,
+            "prev_ofi": 0.0,
+        }
+
         self.state: Dict[str, Dict[str, Any]] = {
-            "BTC/USD": {
-                "base_price": 67850.0,
-                "current_price": 67850.0,
-                "min_atr": 400.0,
-                "max_atr": 1200.0,
-                "target_atr": 680.0,
-                "tick_size": 0.50,
-                "spread_range": (0.50, 2.50),
-                "level_step": 1.50,
-                "avg_level_size": 1.25,
-                "avg_bar_volume": 42.0,
-                "cvd": 0.0,
-                "prev_bbo": None,
-                "prev_ofi": 0.0,
-            },
-            "ETH/USD": {
-                "base_price": 3450.0,
-                "current_price": 3450.0,
-                "min_atr": 30.0,
-                "max_atr": 90.0,
-                "target_atr": 52.0,
-                "tick_size": 0.05,
-                "spread_range": (0.10, 0.60),
-                "level_step": 0.25,
-                "avg_level_size": 18.0,
-                "avg_bar_volume": 380.0,
-                "cvd": 0.0,
-                "prev_bbo": None,
-                "prev_ofi": 0.0,
-            }
+            "BTC/USD": dict(btc_cfg),
+            "BTC/USDT": dict(btc_cfg),
+            "ETH/USD": dict(eth_cfg),
+            "ETH/USDT": dict(eth_cfg),
+            "SOL/USD": dict(sol_cfg),
+            "SOL/USDT": dict(sol_cfg),
         }
         self._historical_bars: Dict[str, List[Dict[str, Any]]] = {}
         self._seed_all_bars(limit=100)
@@ -225,6 +252,13 @@ class SyntheticCryptoGenerator:
     def _get_symbol_config(self, symbol: str) -> Dict[str, Any]:
         norm = normalize_crypto_symbol(symbol)
         if norm not in self.state:
+            # Map alias if equivalent exists
+            base = norm.split("/")[0] if "/" in norm else norm
+            if f"{base}/USDT" in self.state:
+                return self.state[f"{base}/USDT"]
+            if f"{base}/USD" in self.state:
+                return self.state[f"{base}/USD"]
+
             self.state[norm] = {
                 "base_price": 100.0,
                 "current_price": 100.0,
@@ -243,7 +277,7 @@ class SyntheticCryptoGenerator:
         return self.state[norm]
 
     def _seed_all_bars(self, limit: int = 100):
-        for sym in ["BTC/USD", "ETH/USD"]:
+        for sym in list(self.state.keys()):
             self._historical_bars[sym] = self._generate_synthetic_bar_series(sym, limit=limit)
 
     def _generate_synthetic_bar_series(self, symbol: str, limit: int = 60) -> List[Dict[str, Any]]:
@@ -486,16 +520,25 @@ class AlpacaCryptoRestClient:
         }
         self.has_credentials = bool(self.api_key and self.secret_key and not self.api_key.startswith("MOCK"))
 
+    def _to_alpaca_crypto_symbol(self, symbol: str) -> str:
+        s = symbol.upper()
+        if s.endswith("/USDT"):
+            return s.replace("/USDT", "/USD")
+        if s.endswith("USDT"):
+            return f"{s[:-4]}/USD"
+        return s
+
     def fetch_bars(self, symbol: str, timeframe: str = "1Min", limit: int = 50) -> Optional[List[Dict[str, Any]]]:
         if not self.has_credentials:
             return None
+        alpaca_sym = self._to_alpaca_crypto_symbol(symbol)
         try:
             url = f"{self.data_url}/v1beta3/crypto/us/bars"
-            params = {"symbols": symbol, "timeframe": timeframe, "limit": limit}
+            params = {"symbols": alpaca_sym, "timeframe": timeframe, "limit": limit}
             resp = requests.get(url, headers=self.headers, params=params, timeout=5)
             if resp.status_code == 200:
                 data = resp.json().get("bars", {})
-                bars_list = data.get(symbol, [])
+                bars_list = data.get(alpaca_sym, [])
                 if bars_list:
                     result = []
                     for b in bars_list:
@@ -517,13 +560,14 @@ class AlpacaCryptoRestClient:
     def fetch_quote(self, symbol: str) -> Optional[Dict[str, Any]]:
         if not self.has_credentials:
             return None
+        alpaca_sym = self._to_alpaca_crypto_symbol(symbol)
         try:
             url = f"{self.data_url}/v1beta3/crypto/us/latest/quotes"
-            params = {"symbols": symbol}
+            params = {"symbols": alpaca_sym}
             resp = requests.get(url, headers=self.headers, params=params, timeout=5)
             if resp.status_code == 200:
                 data = resp.json().get("quotes", {})
-                q = data.get(symbol)
+                q = data.get(alpaca_sym)
                 if q:
                     bp = float(q["bp"])
                     ap = float(q["ap"])
@@ -544,13 +588,14 @@ class AlpacaCryptoRestClient:
     def fetch_orderbook(self, symbol: str) -> Optional[Dict[str, Any]]:
         if not self.has_credentials:
             return None
+        alpaca_sym = self._to_alpaca_crypto_symbol(symbol)
         try:
             url = f"{self.data_url}/v1beta3/crypto/us/latest/orderbooks"
-            params = {"symbols": symbol}
+            params = {"symbols": alpaca_sym}
             resp = requests.get(url, headers=self.headers, params=params, timeout=5)
             if resp.status_code == 200:
                 data = resp.json().get("orderbooks", {})
-                book = data.get(symbol)
+                book = data.get(alpaca_sym)
                 if book:
                     bids = [{"price": float(b["p"]), "size": float(b["s"])} for b in book.get("b", [])[:10]]
                     asks = [{"price": float(a["p"]), "size": float(a["s"])} for a in book.get("a", [])[:10]]
@@ -603,7 +648,10 @@ class CryptoMarketFeed:
         self._stop_event = threading.Event()
         self._cache_lock = threading.Lock()
         self._snapshot_cache: Dict[str, Dict[str, Any]] = {}
-        self.supported_symbols = ["BTC/USD", "ETH/USD"]
+        self.supported_symbols = [
+            "BTC/USDT", "ETH/USDT", "SOL/USDT",
+            "BTC/USD", "ETH/USD", "SOL/USD"
+        ]
 
     def is_mock_active(self) -> bool:
         return self.force_mock or not self.rest_client.has_credentials

@@ -221,13 +221,14 @@ class TestRiskEngineAndChandelierRatchet(unittest.TestCase):
             lowest_low=60000.0,
             atr_at_entry=1000.0
         )
-        # Price rises to 65000 with ATR 1000 -> Stop ratchets to 65000 - 3000 = 62000
+        # Price rises to 65000 with ATR 1000 -> With progressive milestone (best >= entry + 2.5*ATR),
+        # stop ratchets to 65000 - (1.5 * 1000) = 63500.0 (tightened trail protecting profit)
         _, _, _, pos = engine.evaluate_open_position(pos, 65000.0, 61000.0, 64000.0, 1000.0, "TRENDING_BULL")
-        self.assertEqual(pos.stop_loss, 62000.0)
+        self.assertEqual(pos.stop_loss, 63500.0)
 
         # Price drops to 63000 -> Stop must NOT decrease!
         _, _, _, pos = engine.evaluate_open_position(pos, 63500.0, 62500.0, 63000.0, 1000.0, "TRENDING_BULL")
-        self.assertEqual(pos.stop_loss, 62000.0)
+        self.assertEqual(pos.stop_loss, 63500.0)
 
 
 class TestBacktesterAndValidation(unittest.TestCase):

@@ -273,9 +273,8 @@ class InstitutionalBacktester:
                         atr=feat_prev.atr
                     )
                     init_stop = risk_engine.chandelier.initialize_stop(side, fill_entry_px, feat_prev.atr)
-                    # Asymmetric take-profit at 6.0x ATR allowing trend runs to compound
-                    tp_dist = 6.0 * feat_prev.atr
-                    take_profit = (fill_entry_px + tp_dist) if side == "LONG" else (fill_entry_px - tp_dist)
+                    # Uncapped asymmetric runner extraction: exit purely via monotonic Chandelier ratchet
+                    take_profit = 0.0
 
                     open_pos = Position(
                         symbol=symbol,

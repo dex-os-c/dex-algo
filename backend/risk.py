@@ -45,12 +45,14 @@ class Position:
 
 class ChandelierRatchet:
     """
-    Monotonic Chandelier Trailing Stop.
-    For LONG: Stop strictly increases or stays constant. Never loosens.
-    For SHORT: Stop strictly decreases or stays constant. Never loosens.
+    Progressive Monotonic Chandelier Trailing Stop:
+    - Initial stop: entry +/- (1.8 * atr).
+    - Breakeven milestone: once price advances +1.2 * atr, ratchet stop to entry +/- (0.2 * atr) to lock in breakeven.
+    - Profit tightening milestone: once price advances +2.5 * atr, tighten trailing distance to 1.5 * atr from peak.
+    - Trailing stop strictly monotonically ratchets (never loosens).
     """
 
-    def __init__(self, atr_multiplier: float = 3.0):
+    def __init__(self, atr_multiplier: float = 1.8):
         self.k = atr_multiplier
 
     def initialize_stop(self, side: str, entry_price: float, atr: float) -> float:
@@ -65,14 +67,25 @@ class ChandelierRatchet:
         current_stop: float,
         current_close: float,
         atr: float,
-        best_price: float
+        best_price: float,
+        entry_price: Optional[float] = None
     ) -> float:
-        """Update trailing stop monotonically."""
+        """Update trailing stop monotonically with progressive milestones."""
         if side.upper() == "LONG":
             candidate = best_price - (self.k * atr)
+            if entry_price:
+                if best_price >= entry_price + (1.2 * atr):
+                    candidate = max(candidate, entry_price + (0.2 * atr))
+                if best_price >= entry_price + (2.5 * atr):
+                    candidate = max(candidate, best_price - (1.5 * atr))
             return max(current_stop, candidate)
         else:
             candidate = best_price + (self.k * atr)
+            if entry_price:
+                if best_price <= entry_price - (1.2 * atr):
+                    candidate = min(candidate, entry_price - (0.2 * atr))
+                if best_price <= entry_price - (2.5 * atr):
+                    candidate = min(candidate, best_price + (1.5 * atr))
             return min(current_stop, candidate)
 
 
@@ -236,7 +249,7 @@ class InstitutionalRiskEngine:
         if pos.side.upper() == "LONG":
             pos.highest_high = max(pos.highest_high, current_bar_high)
             new_stop = self.chandelier.ratchet_stop(
-                "LONG", pos.stop_loss, current_bar_close, current_atr, pos.highest_high
+                "LONG", pos.stop_loss, current_bar_close, current_atr, pos.highest_high, entry_price=pos.entry_price
             )
             pos.stop_loss = new_stop
 
@@ -255,7 +268,7 @@ class InstitutionalRiskEngine:
         else:  # SHORT
             pos.lowest_low = min(pos.lowest_low, current_bar_low)
             new_stop = self.chandelier.ratchet_stop(
-                "SHORT", pos.stop_loss, current_bar_close, current_atr, pos.lowest_low
+                "SHORT", pos.stop_loss, current_bar_close, current_atr, pos.lowest_low, entry_price=pos.entry_price
             )
             pos.stop_loss = new_stop
 

@@ -17,114 +17,128 @@ The system is evaluated against real historical market data spanning **Bitcoin (
 
 | Asset Class | Symbol | Trades | Win Rate | Profit Factor | Exp. ($) | Ann. Return | Ann. Sharpe | Sortino | Max DD | Avg R | Ruin Prob (<20% DD) |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| Crypto Major | **BTC/USDT** | 11 | 9.1% | 0.05 | $-64.56 | -13.31% | **-7.65** | -3.66 | 0.75% | -1.45 | 100.0% |
-| Crypto Major | **ETH/USDT** | 5 | 0.0% | 0.00 | $-137.78 | -12.98% | **-7.10** | -3.02 | 0.74% | -0.81 | 100.0% |
-| Liquid Alt | **SOL/USDT** | 9 | 33.3% | 0.20 | $-24.89 | -4.22% | **-3.87** | -2.03 | 0.35% | -0.32 | 100.0% |
-| US Equity | **SPY** | 26 | 26.9% | 0.76 | $-24.09 | -2.16% | **-0.31** | -0.35 | 2.76% | -0.27 | 61.5% |
+| Crypto Major | **BTC/USDT** | 44 | 38.6% | 0.43 | $-19.79 | -2.57% | **-1.67** | -0.64 | 1.49% | -0.66 | 100.0% |
+| Crypto Major | **ETH/USDT** | 21 | 61.9% | 0.20 | $-21.52 | -1.33% | **-2.61** | -0.87 | 0.59% | -0.13 | 100.0% |
+| Liquid Alt | **SOL/USDT** | 23 | 47.8% | 0.20 | $-25.02 | -1.70% | **-3.76** | -1.20 | 0.63% | -0.23 | 100.0% |
+| US Equity | **SPY** | 5 | 80.0% | 105.12 | $6372.11 | 35.62% | **0.41** | 3.86 | 0.95% | 0.63 | 0.0% |
 
 ---
 
 ## Detailed Walk-Forward & Overfitting Analysis
 
 ### 1. BTC/USDT Analysis
-- **Total Bars Analyzed**: 500 hourly bars
-- **Final Net Profit**: $-706.35 on $100,000 initial equity
-- **Total Realized Trades**: 11
-- **Annualized Sharpe Ratio**: -7.65
-- **Sortino Ratio**: -3.66
-- **Maximum Drawdown**: 0.75% (Duration: 448 bars)
-- **Market Exposure Time**: 21.51%
+- **Total Bars Analyzed**: 3000 hourly bars
+- **Final Net Profit**: $-870.85 on $100,000 initial equity
+- **Total Realized Trades**: 44
+- **Annualized Sharpe Ratio**: -1.67
+- **Sortino Ratio**: -0.64
+- **Maximum Drawdown**: 1.49% (Duration: 2749 bars)
+- **Market Exposure Time**: 8.03%
 
 #### Walk-Forward Folds (Rolling Train + Embargo + Test):
 | Fold | In-Sample Sharpe | Out-of-Sample Sharpe | OOS Win Rate | OOS Profit Factor | OOS Max DD |
 |---|---|---|---|---|---|
-| #1 | -10.74 | -7.74 | 0.0% | 0.00 | 0.14% |
-| #2 | -6.70 | -10.98 | 0.0% | 0.00 | 0.07% |
-| #3 | -6.82 | 7.64 | 100.0% | 99.00 | 0.24% |
+| #1 | -1.82 | 0.00 | 0.0% | 0.00 | 0.00% |
+| #2 | -3.76 | 0.14 | 66.7% | 1.02 | 0.21% |
+| #3 | -0.25 | -9.54 | 50.0% | 0.01 | 0.40% |
+| #4 | -3.07 | -6.70 | 0.0% | 0.00 | 0.16% |
+| #5 | -2.20 | -4.30 | 33.3% | 0.26 | 0.39% |
+| #6 | -4.62 | -8.00 | 33.3% | 0.25 | 0.19% |
+| #7 | -6.07 | -7.36 | 0.0% | 0.00 | 0.05% |
+| #8 | -1.49 | -9.05 | 0.0% | 0.00 | 0.23% |
 
 - **In-Sample vs Out-of-Sample Degradation Ratio**: `0.00`
 - **Overfitting Detector Status**: **CONDITIONAL (Regime-sensitive)**
 
 #### Monte Carlo 1,000-Path Bootstrapped Equity Cones:
-- **5th Percentile (Stress Downside)**: $50,779.52
-- **50th Percentile (Expected Median)**: $57,467.86
-- **95th Percentile (Upside Tail)**: $65,064.39
-- **95th Percentile Maximum Drawdown**: 49.47%
+- **5th Percentile (Stress Downside)**: $33,062.12
+- **50th Percentile (Expected Median)**: $45,686.26
+- **95th Percentile (Upside Tail)**: $63,288.58
+- **95th Percentile Maximum Drawdown**: 67.61%
 
 ### 1. ETH/USDT Analysis
-- **Total Bars Analyzed**: 500 hourly bars
-- **Final Net Profit**: $-688.90 on $100,000 initial equity
-- **Total Realized Trades**: 5
-- **Annualized Sharpe Ratio**: -7.10
-- **Sortino Ratio**: -3.02
-- **Maximum Drawdown**: 0.74% (Duration: 337 bars)
-- **Market Exposure Time**: 11.18%
+- **Total Bars Analyzed**: 3000 hourly bars
+- **Final Net Profit**: $-451.80 on $100,000 initial equity
+- **Total Realized Trades**: 21
+- **Annualized Sharpe Ratio**: -2.61
+- **Sortino Ratio**: -0.87
+- **Maximum Drawdown**: 0.59% (Duration: 2898 bars)
+- **Market Exposure Time**: 5.06%
 
 #### Walk-Forward Folds (Rolling Train + Embargo + Test):
 | Fold | In-Sample Sharpe | Out-of-Sample Sharpe | OOS Win Rate | OOS Profit Factor | OOS Max DD |
 |---|---|---|---|---|---|
-| #1 | -9.04 | 0.00 | 0.0% | 0.00 | 0.00% |
-| #2 | -12.38 | -17.87 | 0.0% | 0.00 | 0.43% |
-| #3 | -7.86 | -16.47 | 0.0% | 0.00 | 1.20% |
+| #1 | -3.54 | 0.00 | 0.0% | 0.00 | 0.00% |
+| #2 | -3.00 | 0.00 | 0.0% | 0.00 | 0.00% |
+| #3 | -4.88 | -2.66 | 0.0% | 0.00 | 0.13% |
+| #4 | -3.36 | 0.00 | 0.0% | 0.00 | 0.00% |
+| #5 | 0.00 | -10.60 | 0.0% | 0.00 | 0.20% |
+| #6 | -5.60 | -6.43 | 0.0% | 0.00 | 0.15% |
+| #7 | -6.38 | 0.68 | 100.0% | 99.00 | 0.04% |
+| #8 | -6.15 | -8.70 | 0.0% | 0.00 | 0.31% |
 
 - **In-Sample vs Out-of-Sample Degradation Ratio**: `0.00`
 - **Overfitting Detector Status**: **CONDITIONAL (Regime-sensitive)**
 
 #### Monte Carlo 1,000-Path Bootstrapped Equity Cones:
-- **5th Percentile (Stress Downside)**: $40,282.11
-- **50th Percentile (Expected Median)**: $43,747.45
-- **95th Percentile (Upside Tail)**: $47,562.58
-- **95th Percentile Maximum Drawdown**: 59.72%
+- **5th Percentile (Stress Downside)**: $18,976.09
+- **50th Percentile (Expected Median)**: $30,532.27
+- **95th Percentile (Upside Tail)**: $50,965.04
+- **95th Percentile Maximum Drawdown**: 81.45%
 
 ### 1. SOL/USDT Analysis
-- **Total Bars Analyzed**: 500 hourly bars
-- **Final Net Profit**: $-224.03 on $100,000 initial equity
-- **Total Realized Trades**: 9
-- **Annualized Sharpe Ratio**: -3.87
-- **Sortino Ratio**: -2.03
-- **Maximum Drawdown**: 0.35% (Duration: 461 bars)
-- **Market Exposure Time**: 17.20%
+- **Total Bars Analyzed**: 3000 hourly bars
+- **Final Net Profit**: $-575.56 on $100,000 initial equity
+- **Total Realized Trades**: 23
+- **Annualized Sharpe Ratio**: -3.76
+- **Sortino Ratio**: -1.20
+- **Maximum Drawdown**: 0.63% (Duration: 2966 bars)
+- **Market Exposure Time**: 5.87%
 
 #### Walk-Forward Folds (Rolling Train + Embargo + Test):
 | Fold | In-Sample Sharpe | Out-of-Sample Sharpe | OOS Win Rate | OOS Profit Factor | OOS Max DD |
 |---|---|---|---|---|---|
-| #1 | -6.68 | 0.00 | 0.0% | 0.00 | 0.00% |
-| #2 | -13.35 | 0.00 | 0.0% | 0.00 | 0.00% |
-| #3 | 0.65 | -7.34 | 0.0% | 0.00 | 0.14% |
+| #1 | -4.40 | 0.00 | 0.0% | 0.00 | 0.00% |
+| #2 | -0.57 | -10.89 | 0.0% | 0.00 | 0.33% |
+| #3 | -2.25 | -0.18 | 0.0% | 0.00 | 0.12% |
+| #4 | -5.20 | -11.53 | 0.0% | 0.00 | 0.34% |
+| #5 | -7.56 | -4.16 | 75.0% | 0.03 | 0.40% |
+| #6 | -4.30 | -5.20 | 50.0% | 0.05 | 0.30% |
+| #7 | -5.15 | 0.00 | 0.0% | 0.00 | 0.00% |
+| #8 | -2.85 | -0.56 | 50.0% | 0.89 | 0.18% |
 
 - **In-Sample vs Out-of-Sample Degradation Ratio**: `0.00`
 - **Overfitting Detector Status**: **CONDITIONAL (Regime-sensitive)**
 
 #### Monte Carlo 1,000-Path Bootstrapped Equity Cones:
-- **5th Percentile (Stress Downside)**: $44,143.08
-- **50th Percentile (Expected Median)**: $54,151.90
-- **95th Percentile (Upside Tail)**: $65,014.64
-- **95th Percentile Maximum Drawdown**: 56.27%
+- **5th Percentile (Stress Downside)**: $8,429.68
+- **50th Percentile (Expected Median)**: $14,644.76
+- **95th Percentile (Upside Tail)**: $25,843.41
+- **95th Percentile Maximum Drawdown**: 91.76%
 
 ### 1. SPY Analysis
-- **Total Bars Analyzed**: 500 hourly bars
-- **Final Net Profit**: $-613.20 on $100,000 initial equity
-- **Total Realized Trades**: 26
-- **Annualized Sharpe Ratio**: -0.31
-- **Sortino Ratio**: -0.35
-- **Maximum Drawdown**: 2.76% (Duration: 411 bars)
-- **Market Exposure Time**: 69.68%
+- **Total Bars Analyzed**: 1500 hourly bars
+- **Final Net Profit**: $31860.53 on $100,000 initial equity
+- **Total Realized Trades**: 5
+- **Annualized Sharpe Ratio**: 0.41
+- **Sortino Ratio**: 3.86
+- **Maximum Drawdown**: 0.95% (Duration: 734 bars)
+- **Market Exposure Time**: 4.03%
 
 #### Walk-Forward Folds (Rolling Train + Embargo + Test):
 | Fold | In-Sample Sharpe | Out-of-Sample Sharpe | OOS Win Rate | OOS Profit Factor | OOS Max DD |
 |---|---|---|---|---|---|
-| #1 | -0.16 | -8.08 | 0.0% | 0.00 | 1.60% |
-| #2 | -2.72 | 0.00 | 0.0% | 0.00 | 0.00% |
-| #3 | -2.47 | 0.00 | 0.0% | 0.00 | 0.00% |
+| #1 | -0.14 | 0.00 | 0.0% | 0.00 | 0.00% |
+| #2 | -0.14 | 0.00 | 0.0% | 0.00 | 0.00% |
 
 - **In-Sample vs Out-of-Sample Degradation Ratio**: `0.00`
 - **Overfitting Detector Status**: **CONDITIONAL (Regime-sensitive)**
 
 #### Monte Carlo 1,000-Path Bootstrapped Equity Cones:
-- **5th Percentile (Stress Downside)**: $65,697.82
-- **50th Percentile (Expected Median)**: $89,235.82
-- **95th Percentile (Upside Tail)**: $125,385.15
-- **95th Percentile Maximum Drawdown**: 38.51%
+- **5th Percentile (Stress Downside)**: $225,880,821,567,226,944.00
+- **50th Percentile (Expected Median)**: $34,568,393,368,305,045,340,160.00
+- **95th Percentile (Upside Tail)**: $6,419,384,928,691,071,195,772,092,416.00
+- **95th Percentile Maximum Drawdown**: 7.43%
 
 
 ---

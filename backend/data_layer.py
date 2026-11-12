@@ -1,14 +1,17 @@
 """
 Institutional Multi-Asset Data Layer
 ====================================
-Production data layer supporting:
-1. Binance Public REST (Real crypto OHLCV + Taker Buy Volume for order flow).
-2. Coinbase Public REST (Spot candles for major crypto pairs).
-3. Alpaca Market Data (US Equities + Crypto fallback).
-4. Local on-disk persistent caching for fast, reproducible backtests.
-5. Synthetic high-fidelity generator when operating fully offline.
+Production-grade multi-source market data layer supporting:
+1. Binance Public REST (Real crypto OHLCV + Taker Buy Volume for order flow aggressor delta).
+   Supports pagination for long historical windows (e.g., 2+ years of 1h/4h bars).
+2. Coinbase Public REST (Spot candles for major crypto pairs: BTC, ETH, SOL).
+3. Alpaca Market Data (US Equities SPY, QQQ + Crypto fallback via REST and WebSocket).
+4. Local on-disk persistent caching with multi-timeframe caching & freshness validation.
+5. Strict data cleaning and validation (monotonic ordering, deduplication, OHLC sanity bounds).
+6. Synthetic high-fidelity generator when operating offline or in isolated test mode.
 
-All bar timestamps are normalized to UTC ISO-8601 strings or Unix millisecond epochs.
+All bar timestamps are normalized to UTC ISO-8601 strings (YYYY-MM-DDTHH:MM:SSZ)
+with exact millisecond Unix epoch.
 """
 
 import os
@@ -53,26 +56,31 @@ class Bar:
 
 
 def normalize_symbol(symbol: str) -> str:
-    """Normalize symbol to standard slash format: BTC/USDT, ETH/USDT, SPY, etc."""
-    s = symbol.upper().replace("-", "").replace("_", "").strip()
-    if "/" in symbol:
-        parts = symbol.upper().split("/")
+    """
+    Normalize symbol to standard slash format:
+    BTC/USDT, ETH/USDT, SOL/USDT, SPY, QQQ, etc.
+    """
+    s = symbol.upper().replace("-", "/").replace("_", "/").strip()
+    if "/" in s:
+        parts = s.split("/")
         return f"{parts[0]}/{parts[1]}"
-    if s.endswith("USDT"):
+    if s.endswith("USDT") and len(s) > 4:
         return f"{s[:-4]}/USDT"
-    if s.endswith("USD"):
+    if s.endswith("USD") and len(s) > 3:
         return f"{s[:-3]}/USD"
-    # Equity symbols: SPY, QQQ, AAPL, etc.
+    if s in ("BTC", "ETH", "SOL"):
+        return f"{s}/USDT"
+    # Equity symbols: SPY, QQQ, AAPL, MSFT, etc.
     return s
 
 
 def to_binance_symbol(symbol: str) -> str:
-    """Convert standard symbol to Binance symbol (e.g. BTCUSDT, ETHUSDT)."""
+    """Convert standard symbol to Binance symbol (e.g. BTCUSDT, ETHUSDT, SOLUSDT)."""
     norm = normalize_symbol(symbol)
     if "/" in norm:
         base, quote = norm.split("/")
         if quote == "USD":
-            quote = "USDT"  # Binance uses USDT for spot
+            quote = "USDT"
         return f"{base}{quote}"
     if norm in ("BTC", "ETH", "SOL", "BNB"):
         return f"{norm}USDT"
@@ -80,14 +88,90 @@ def to_binance_symbol(symbol: str) -> str:
 
 
 def to_coinbase_product(symbol: str) -> str:
-    """Convert standard symbol to Coinbase product id (e.g. BTC-USD, ETH-USD)."""
+    """Convert standard symbol to Coinbase product id (e.g. BTC-USD, ETH-USD, SOL-USD)."""
+    norm = normalize_symbol(symbol)
+    if "/" in norm:
+        base, quote = norm.split("/")
+        return f"{base}-USD"
+    if norm in ("BTC", "ETH", "SOL"):
+        return f"{norm}-USD"
+    return f"{norm}-USD"
+
+
+def to_alpaca_symbol(symbol: str) -> str:
+    """Convert standard symbol to Alpaca format (e.g. BTC/USD, ETH/USD, SPY, QQQ)."""
     norm = normalize_symbol(symbol)
     if "/" in norm:
         base, quote = norm.split("/")
         if quote == "USDT":
             quote = "USD"
-        return f"{base}-{quote}"
-    return f"{norm}-USD"
+        return f"{base}/{quote}"
+    return norm
+
+
+def normalize_interval(interval: str) -> str:
+    """Normalize interval strings to canonical standard: 1m, 5m, 15m, 30m, 1h, 4h, 1d."""
+    norm = interval.strip()
+    mapping = {
+        "1m": "1m", "1min": "1m", "1Min": "1m",
+        "5m": "5m", "5min": "5m", "5Min": "5m",
+        "15m": "15m", "15min": "15m", "15Min": "15m",
+        "30m": "30m", "30min": "30m", "30Min": "30m",
+        "1h": "1h", "1hour": "1h", "1Hour": "1h", "1H": "1h",
+        "4h": "4h", "4hour": "4h", "4Hour": "4h", "4H": "4h",
+        "1d": "1d", "1day": "1d", "1Day": "1d", "1D": "1d"
+    }
+    return mapping.get(norm, mapping.get(norm.lower(), norm))
+
+
+def clean_and_validate_bars(bars: List[Bar]) -> List[Bar]:
+    """
+    Ensures strict causal ordering, deduplication, and sanity checking:
+    1. Deduplicate by epoch_ms.
+    2. Strictly chronological sorting.
+    3. High >= max(open, close), Low <= min(open, close).
+    4. Non-negative volume, trades >= 0.
+    5. Bounded taker buy volume (0 <= taker_buy <= volume).
+    """
+    if not bars:
+        return []
+
+    seen_epochs = set()
+    cleaned: List[Bar] = []
+
+    for b in bars:
+        if b.epoch_ms in seen_epochs:
+            continue
+        seen_epochs.add(b.epoch_ms)
+
+        # Enforce OHLC consistency
+        open_p = max(1e-4, float(b.open))
+        close_p = max(1e-4, float(b.close))
+        high_p = max(open_p, close_p, float(b.high))
+        low_p = min(open_p, close_p, max(1e-4, float(b.low)))
+        vol = max(0.0, float(b.volume))
+        q_vol = float(b.quote_volume) if b.quote_volume > 0 else (vol * (open_p + close_p) / 2.0)
+        trades = max(1, int(b.trades)) if vol > 0 else 0
+        taker_buy = max(0.0, min(vol, float(b.taker_buy_vol)))
+        vwap = float(b.vwap) if b.vwap > 0 else (q_vol / vol if vol > 0 else (open_p + high_p + low_p + close_p) / 4.0)
+
+        cleaned.append(Bar(
+            timestamp=b.timestamp,
+            epoch_ms=b.epoch_ms,
+            open=round(open_p, 4),
+            high=round(high_p, 4),
+            low=round(low_p, 4),
+            close=round(close_p, 4),
+            volume=round(vol, 4),
+            quote_volume=round(q_vol, 2),
+            trades=trades,
+            taker_buy_vol=round(taker_buy, 4),
+            vwap=round(vwap, 4)
+        ))
+
+    # Sort strictly chronological
+    cleaned.sort(key=lambda x: x.epoch_ms)
+    return cleaned
 
 
 class MarketDataClient:
@@ -106,15 +190,38 @@ class MarketDataClient:
 
     def _get_cache_path(self, symbol: str, interval: str, limit: int) -> str:
         clean_sym = symbol.replace("/", "_").replace("-", "_")
-        return os.path.join(_CACHE_DIR, f"{clean_sym}_{interval}_{limit}.json")
+        norm_int = normalize_interval(interval)
+        return os.path.join(_CACHE_DIR, f"{clean_sym}_{norm_int}_{limit}.json")
+
+    def _get_master_cache_path(self, symbol: str, interval: str) -> str:
+        clean_sym = symbol.replace("/", "_").replace("-", "_")
+        norm_int = normalize_interval(interval)
+        return os.path.join(_CACHE_DIR, f"{clean_sym}_{norm_int}_master.json")
 
     def _load_from_cache(self, symbol: str, interval: str, limit: int) -> Optional[List[Bar]]:
         if not self.cache_enabled:
             return None
-        cache_path = self._get_cache_path(symbol, interval, limit)
+        norm_int = normalize_interval(interval)
+
+        # 1. Try master cache first
+        master_path = self._get_master_cache_path(symbol, norm_int)
+        if os.path.exists(master_path):
+            try:
+                mtime = os.path.getmtime(master_path)
+                # Master cache valid for 24 hours
+                if (time.time() - mtime) < 86400:
+                    with open(master_path, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                        bars = [Bar(**item) for item in data]
+                        if len(bars) >= limit:
+                            return bars[-limit:]
+            except Exception as e:
+                logger.debug(f"Master cache read error for {symbol}: {e}")
+
+        # 2. Try exact limit cache path
+        cache_path = self._get_cache_path(symbol, norm_int, limit)
         if os.path.exists(cache_path):
             try:
-                # Check cache freshness (e.g. < 4 hours old for historical analysis)
                 mtime = os.path.getmtime(cache_path)
                 if (time.time() - mtime) < 14400:  # 4 hours
                     with open(cache_path, "r", encoding="utf-8") as f:
@@ -127,12 +234,31 @@ class MarketDataClient:
     def _save_to_cache(self, symbol: str, interval: str, limit: int, bars: List[Bar]):
         if not self.cache_enabled or not bars:
             return
-        cache_path = self._get_cache_path(symbol, interval, limit)
+        norm_int = normalize_interval(interval)
+
+        # Save limit-specific cache
+        cache_path = self._get_cache_path(symbol, norm_int, limit)
         try:
             with open(cache_path, "w", encoding="utf-8") as f:
                 json.dump([b.to_dict() for b in bars], f)
         except Exception as e:
             logger.debug(f"Cache save error for {symbol}: {e}")
+
+        # Also update master cache with merged and deduplicated bars
+        master_path = self._get_master_cache_path(symbol, norm_int)
+        try:
+            existing: List[Bar] = []
+            if os.path.exists(master_path):
+                with open(master_path, "r", encoding="utf-8") as f:
+                    existing = [Bar(**item) for item in json.load(f)]
+            merged = clean_and_validate_bars(existing + bars)
+            # Retain up to 25,000 bars in master cache (~3 years of 1h or 11 years of 4h)
+            if len(merged) > 25000:
+                merged = merged[-25000:]
+            with open(master_path, "w", encoding="utf-8") as f:
+                json.dump([b.to_dict() for b in merged], f)
+        except Exception as e:
+            logger.debug(f"Master cache save error for {symbol}: {e}")
 
     # --------------------------------------------------------------------------
     # 1. Binance Public REST Provider (with Real Trade Aggressor Volume Delta)
@@ -146,61 +272,96 @@ class MarketDataClient:
         end_time: Optional[int] = None
     ) -> List[Bar]:
         """
-        Fetches official klines from Binance Public REST API.
+        Fetches official klines from Binance Public REST API with auto-pagination.
         Binance Kline array fields:
         [0]: Open time, [1]: Open, [2]: High, [3]: Low, [4]: Close, [5]: Volume,
         [6]: Close time, [7]: Quote asset volume, [8]: Number of trades,
         [9]: Taker buy base asset volume, [10]: Taker buy quote asset volume, [11]: Ignore
         """
         binance_sym = to_binance_symbol(symbol)
+        norm_int = normalize_interval(interval)
         url = "https://api.binance.com/api/v3/klines"
-        params: Dict[str, Any] = {
-            "symbol": binance_sym,
-            "interval": interval,
-            "limit": min(limit, 1000)
-        }
-        if start_time:
-            params["startTime"] = start_time
-        if end_time:
-            params["endTime"] = end_time
 
-        try:
-            resp = self.session.get(url, params=params, timeout=self.timeout)
-            if resp.status_code == 200:
-                raw_data = resp.json()
-                bars: List[Bar] = []
-                for row in raw_data:
-                    epoch_ms = int(row[0])
-                    dt = datetime.fromtimestamp(epoch_ms / 1000.0, tz=timezone.utc)
-                    open_p = float(row[1])
-                    high_p = float(row[2])
-                    low_p = float(row[3])
-                    close_p = float(row[4])
-                    vol = float(row[5])
-                    quote_vol = float(row[7])
-                    trades = int(row[8])
-                    taker_buy = float(row[9])
-                    vwap = (quote_vol / vol) if vol > 0 else (open_p + high_p + low_p + close_p) / 4.0
+        all_bars: List[Bar] = []
+        target_limit = limit
+        curr_end_time = end_time
 
-                    bars.append(Bar(
-                        timestamp=dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
-                        epoch_ms=epoch_ms,
-                        open=open_p,
-                        high=high_p,
-                        low=low_p,
-                        close=close_p,
-                        volume=vol,
-                        quote_volume=quote_vol,
-                        trades=trades,
-                        taker_buy_vol=taker_buy,
-                        vwap=vwap
-                    ))
-                return bars
-            else:
-                logger.warning(f"Binance klines failed for {symbol}: HTTP {resp.status_code}")
-        except Exception as e:
-            logger.warning(f"Binance fetch exception for {symbol}: {e}")
-        return []
+        # Binance caps per-request limit at 1000
+        while len(all_bars) < target_limit:
+            fetch_count = min(target_limit - len(all_bars), 1000)
+            params: Dict[str, Any] = {
+                "symbol": binance_sym,
+                "interval": norm_int,
+                "limit": fetch_count
+            }
+            if start_time:
+                params["startTime"] = start_time
+            if curr_end_time:
+                params["endTime"] = curr_end_time
+
+            try:
+                resp = self.session.get(url, params=params, timeout=self.timeout)
+                if resp.status_code == 200:
+                    raw_data = resp.json()
+                    if not raw_data:
+                        break
+                    chunk: List[Bar] = []
+                    for row in raw_data:
+                        epoch_ms = int(row[0])
+                        dt = datetime.fromtimestamp(epoch_ms / 1000.0, tz=timezone.utc)
+                        open_p = float(row[1])
+                        high_p = float(row[2])
+                        low_p = float(row[3])
+                        close_p = float(row[4])
+                        vol = float(row[5])
+                        quote_vol = float(row[7])
+                        trades = int(row[8])
+                        taker_buy = float(row[9])
+                        vwap = (quote_vol / vol) if vol > 0 else (open_p + high_p + low_p + close_p) / 4.0
+
+                        chunk.append(Bar(
+                            timestamp=dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                            epoch_ms=epoch_ms,
+                            open=open_p,
+                            high=high_p,
+                            low=low_p,
+                            close=close_p,
+                            volume=vol,
+                            quote_volume=quote_vol,
+                            trades=trades,
+                            taker_buy_vol=taker_buy,
+                            vwap=vwap
+                        ))
+
+                    if not chunk:
+                        break
+
+                    # If paginating backwards without explicit start_time
+                    if target_limit > 1000 and not start_time:
+                        all_bars = chunk + all_bars
+                        earliest_epoch = chunk[0].epoch_ms
+                        curr_end_time = earliest_epoch - 1
+                        if len(chunk) < fetch_count:
+                            break
+                        time.sleep(0.05)  # Respect rate limits
+                    else:
+                        all_bars.extend(chunk)
+                        if len(chunk) < fetch_count:
+                            break
+                        if start_time:
+                            start_time = chunk[-1].epoch_ms + 1
+                        time.sleep(0.05)
+
+                    if len(all_bars) >= target_limit:
+                        break
+                else:
+                    logger.warning(f"Binance klines failed for {symbol}: HTTP {resp.status_code}")
+                    break
+            except Exception as e:
+                logger.warning(f"Binance fetch exception for {symbol}: {e}")
+                break
+
+        return clean_and_validate_bars(all_bars[-limit:]) if all_bars else []
 
     # --------------------------------------------------------------------------
     # 2. Coinbase Public REST Provider
@@ -233,7 +394,6 @@ class MarketDataClient:
                     close_p = float(row[4])
                     vol = float(row[5])
                     approx_quote_vol = vol * ((open_p + close_p) / 2.0)
-                    # Proxy taker buy volume as 50% +/- price direction
                     pct_change = (close_p - open_p) / open_p if open_p > 0 else 0
                     buy_ratio = max(0.2, min(0.8, 0.5 + pct_change * 5.0))
                     taker_buy = vol * buy_ratio
@@ -252,7 +412,7 @@ class MarketDataClient:
                         taker_buy_vol=taker_buy,
                         vwap=vwap
                     ))
-                return bars
+                return clean_and_validate_bars(bars)
             else:
                 logger.warning(f"Coinbase candles failed for {symbol}: HTTP {resp.status_code}")
         except Exception as e:
@@ -269,44 +429,85 @@ class MarketDataClient:
         limit: int = 500
     ) -> List[Bar]:
         """
-        Fetches bars from Alpaca Market Data API if credentials exist.
+        Fetches bars from Alpaca Market Data API if credentials exist,
+        or uses AlpacaClient fallback.
         """
         api_key = os.getenv("ALPACA_API_KEY", "")
         secret_key = os.getenv("ALPACA_SECRET_KEY", "")
-        if not api_key or not secret_key:
-            return []
 
-        is_crypto = "/" in symbol or symbol.upper().endswith("USD")
-        endpoint = "crypto/bars" if is_crypto else "stocks/bars"
-        url = f"https://data.alpaca.markets/v2/{endpoint}"
-        headers = {
-            "APCA-API-KEY-ID": api_key,
-            "APCA-API-SECRET-KEY": secret_key
-        }
-        params = {
-            "symbols": symbol,
-            "timeframe": timeframe,
-            "limit": limit
-        }
+        norm_sym = normalize_symbol(symbol)
+        is_crypto = "/" in norm_sym or norm_sym.endswith("USD") or norm_sym.endswith("USDT")
+        alpaca_sym = to_alpaca_symbol(norm_sym)
+
+        if api_key and secret_key and not api_key.startswith("your_") and not api_key.startswith("MOCK"):
+            endpoint = "crypto/bars" if is_crypto else "stocks/bars"
+            url = f"https://data.alpaca.markets/v2/{endpoint}"
+            headers = {
+                "APCA-API-KEY-ID": api_key,
+                "APCA-API-SECRET-KEY": secret_key
+            }
+            params = {
+                "symbols": alpaca_sym,
+                "timeframe": timeframe,
+                "limit": min(limit, 1000)
+            }
+            try:
+                resp = self.session.get(url, headers=headers, params=params, timeout=self.timeout)
+                if resp.status_code == 200:
+                    data = resp.json().get("bars", {}).get(alpaca_sym, [])
+                    bars: List[Bar] = []
+                    for b in data:
+                        iso_t = b.get("t")
+                        dt = datetime.fromisoformat(iso_t.replace("Z", "+00:00"))
+                        epoch_ms = int(dt.timestamp() * 1000)
+                        open_p = float(b["o"])
+                        high_p = float(b["h"])
+                        low_p = float(b["l"])
+                        close_p = float(b["c"])
+                        vol = float(b["v"])
+                        vwap = float(b.get("vw", (open_p + high_p + low_p + close_p) / 4.0))
+                        n_trades = int(b.get("n", 100))
+                        quote_vol = vol * vwap
+                        taker_buy = vol * 0.5
+
+                        bars.append(Bar(
+                            timestamp=iso_t,
+                            epoch_ms=epoch_ms,
+                            open=open_p,
+                            high=high_p,
+                            low=low_p,
+                            close=close_p,
+                            volume=vol,
+                            quote_volume=quote_vol,
+                            trades=n_trades,
+                            taker_buy_vol=taker_buy,
+                            vwap=vwap
+                        ))
+                    if bars:
+                        return clean_and_validate_bars(bars)
+            except Exception as e:
+                logger.warning(f"Alpaca bars fetch failed for {symbol}: {e}")
+
+        # Check local AlpacaClient mock engine if available
         try:
-            resp = self.session.get(url, headers=headers, params=params, timeout=self.timeout)
-            if resp.status_code == 200:
-                data = resp.json().get("bars", {}).get(symbol, [])
-                bars: List[Bar] = []
-                for b in data:
-                    iso_t = b.get("t")
-                    dt = datetime.fromisoformat(iso_t.replace("Z", "+00:00"))
-                    epoch_ms = int(dt.timestamp() * 1000)
-                    open_p = float(b["o"])
-                    high_p = float(b["h"])
-                    low_p = float(b["l"])
-                    close_p = float(b["c"])
-                    vol = float(b["v"])
-                    vwap = float(b.get("vw", (open_p + high_p + low_p + close_p) / 4.0))
-                    n_trades = int(b.get("n", 100))
-                    quote_vol = vol * vwap
-                    taker_buy = vol * 0.5  # Alpaca stocks doesn't give taker buy vol
-
+            import alpaca_client
+            client = alpaca_client.AlpacaClient()
+            raw_bars = client.get_bars(alpaca_sym, timeframe=timeframe, limit=limit)
+            if raw_bars:
+                bars = []
+                for b in raw_bars:
+                    iso_t = b.get("t", "")
+                    try:
+                        dt = datetime.fromisoformat(iso_t.replace("Z", "+00:00"))
+                        epoch_ms = int(dt.timestamp() * 1000)
+                    except Exception:
+                        epoch_ms = int(time.time() * 1000)
+                    open_p = float(b.get("o", 100.0))
+                    high_p = float(b.get("h", open_p))
+                    low_p = float(b.get("l", open_p))
+                    close_p = float(b.get("c", open_p))
+                    vol = float(b.get("v", 1000.0))
+                    quote_vol = vol * close_p
                     bars.append(Bar(
                         timestamp=iso_t,
                         epoch_ms=epoch_ms,
@@ -316,13 +517,15 @@ class MarketDataClient:
                         close=close_p,
                         volume=vol,
                         quote_volume=quote_vol,
-                        trades=n_trades,
-                        taker_buy_vol=taker_buy,
-                        vwap=vwap
+                        trades=max(1, int(vol / 100)),
+                        taker_buy_vol=vol * 0.5,
+                        vwap=(open_p + high_p + low_p + close_p) / 4.0
                     ))
-                return bars
-        except Exception as e:
-            logger.warning(f"Alpaca bars fetch failed for {symbol}: {e}")
+                if bars:
+                    return clean_and_validate_bars(bars)
+        except Exception:
+            pass
+
         return []
 
     # --------------------------------------------------------------------------
@@ -418,7 +621,7 @@ class MarketDataClient:
             ))
             cur_p = close_p
 
-        return bars
+        return clean_and_validate_bars(bars)
 
     # --------------------------------------------------------------------------
     # 5. Master Unified Historical Fetcher
@@ -435,50 +638,55 @@ class MarketDataClient:
         and fallback to synthetic generator if completely offline.
         """
         norm = normalize_symbol(symbol)
+        norm_int = normalize_interval(interval)
 
         # 1. Check local disk cache unless force_refresh
         if not force_refresh:
-            cached = self._load_from_cache(norm, interval, limit)
+            cached = self._load_from_cache(norm, norm_int, limit)
             if cached and len(cached) >= limit:
                 return cached[-limit:]
 
         bars: List[Bar] = []
 
-        # 2. If crypto symbol, try Binance first (best microstructure data)
+        # 2. If crypto symbol, try Binance first (best microstructure data & volume delta)
         if any(c in norm for c in ("BTC", "ETH", "SOL", "USDT", "USD")):
-            bars = self.fetch_binance_klines(symbol=norm, interval=interval, limit=limit)
+            bars = self.fetch_binance_klines(symbol=norm, interval=norm_int, limit=limit)
             if not bars:
                 # Try Coinbase
-                gran_map = {"1m": 60, "5m": 300, "15m": 900, "1h": 3600, "1d": 86400}
-                gran = gran_map.get(interval, 3600)
+                gran_map = {"1m": 60, "5m": 300, "15m": 900, "1h": 3600, "4h": 21600, "1d": 86400}
+                gran = gran_map.get(norm_int, 3600)
                 bars = self.fetch_coinbase_candles(symbol=norm, granularity=gran)
 
-        # 3. If equities, try Alpaca
+        # 3. If equities or crypto fallback, try Alpaca
         if not bars:
-            alpaca_tf_map = {"1m": "1Min", "5m": "5Min", "15m": "15Min", "1h": "1Hour", "1d": "1Day"}
-            tf = alpaca_tf_map.get(interval, "1Hour")
+            alpaca_tf_map = {
+                "1m": "1Min", "5m": "5Min", "15m": "15Min", "30m": "30Min",
+                "1h": "1Hour", "4h": "4Hour", "1d": "1Day"
+            }
+            tf = alpaca_tf_map.get(norm_int, "1Hour")
             bars = self.fetch_alpaca_bars(symbol=norm, timeframe=tf, limit=limit)
 
         # 4. If still empty, load cached even if expired
         if not bars:
-            cache_path = self._get_cache_path(norm, interval, limit)
+            cache_path = self._get_cache_path(norm, norm_int, limit)
             if os.path.exists(cache_path):
                 try:
                     with open(cache_path, "r", encoding="utf-8") as f:
                         data = json.load(f)
-                        bars = [Bar(**item) for item in data]
+                        bars = clean_and_validate_bars([Bar(**item) for item in data])
                 except Exception:
                     pass
 
         # 5. Fallback to high-fidelity synthetic if network/API is unreachable
         if not bars:
             logger.info(f"Generating high-fidelity synthetic bars for {norm}")
-            hours = 1.0 if interval == "1h" else (24.0 if interval == "1d" else 0.25)
+            hours_map = {"1m": 1/60.0, "5m": 5/60.0, "15m": 15/60.0, "30m": 0.5, "1h": 1.0, "4h": 4.0, "1d": 24.0}
+            hours = hours_map.get(norm_int, 1.0)
             bars = self.generate_synthetic_bars(symbol=norm, limit=limit, interval_hours=hours)
 
         # Save to disk cache for reproducible fast execution
         if bars:
-            self._save_to_cache(norm, interval, limit, bars)
+            self._save_to_cache(norm, norm_int, limit, bars)
 
         return bars[-limit:] if len(bars) > limit else bars
 
