@@ -1,0 +1,759 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ALPACA CRYPTO QUANT TERMINAL | Multi-Alpha Regime Trading Engine</title>
+  
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            abyss: '#070b14',
+            obsidian: '#0b1120',
+            slateDark: '#0f172a',
+            emeraldProfit: '#10b981',
+            roseLoss: '#f43f5e',
+            cyanGlow: '#06b6d4',
+            indigoAccent: '#6366f1'
+          }
+        }
+      }
+    }
+  </script>
+
+  <!-- Google Fonts: Inter & JetBrains Mono -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+  <!-- Lucide Icons CDN -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+
+  <!-- Chart.js CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+
+  <!-- Custom Stylesheet -->
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="bg-abyss text-slate-100 bg-grid-pattern min-h-screen flex flex-col antialiased selection:bg-cyan-500 selection:text-white">
+
+  <!-- Toast Notification Container -->
+  <div id="toast-container"></div>
+
+  <!-- Header Section -->
+  <header class="border-b border-slate-800/80 bg-slate-950/80 backdrop-blur-md sticky top-0 z-40 px-4 lg:px-8 py-3">
+    <div class="max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-4">
+      
+      <!-- Brand & Title -->
+      <div class="flex items-center gap-3.5">
+        <div class="w-10 h-10 rounded-xl bg-gradient-to-tr from-amber-500 via-cyan-500 to-indigo-600 p-0.5 shadow-lg shadow-cyan-500/20 flex items-center justify-center">
+          <div class="w-full h-full bg-slate-950 rounded-[10px] flex items-center justify-center">
+            <i data-lucide="zap" class="w-5 h-5 text-amber-400"></i>
+          </div>
+        </div>
+        <div>
+          <div class="flex items-center gap-2">
+            <h1 class="text-lg font-bold tracking-wider text-white">ALPACA CRYPTO QUANT TERMINAL</h1>
+            <span class="px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider rounded-full bg-cyan-500/10 text-cyan-400 border border-cyan-500/30">
+              INSTITUTIONAL v3.0
+            </span>
+          </div>
+          <p class="text-xs text-slate-400">Multi-Alpha Ensemble &bull; Market Regime Radar &bull; Fractional Kelly &bull; Chandelier Exits</p>
+        </div>
+      </div>
+
+      <!-- Live Badges & System Clock -->
+      <div class="flex flex-wrap items-center gap-2 sm:gap-3 text-xs">
+        
+        <!-- 24/7 Live Crypto Market Badge -->
+        <div class="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-400">
+          <span class="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
+          <span class="w-2 h-2 rounded-full bg-emerald-400 -ml-3.5"></span>
+          <span class="font-medium tracking-wide">24/7 CRYPTO LIVE</span>
+        </div>
+
+        <!-- Connection / Mode Badge -->
+        <div id="badge-connection" class="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-slate-800 border border-slate-700 text-slate-300">
+          <i data-lucide="shield-check" class="w-3.5 h-3.5 text-cyan-400"></i>
+          <span id="badge-connection-text" class="font-medium">MOCK QUANT FEED</span>
+        </div>
+
+        <!-- Server Clock -->
+        <div class="flex items-center gap-1.5 px-3 py-1 rounded-full bg-slate-900 border border-slate-800 text-slate-400 tabular-nums">
+          <i data-lucide="clock" class="w-3.5 h-3.5 text-slate-400"></i>
+          <span id="server-time" class="font-medium">--:--:-- UTC</span>
+        </div>
+
+      </div>
+
+    </div>
+  </header>
+
+  <!-- BITCOIN 24/7 LIVE HEADER TICKER BAR -->
+  <section class="border-b border-slate-800/60 bg-slate-900/60 backdrop-blur px-4 lg:px-8 py-2.5">
+    <div class="max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-4 text-xs">
+      
+      <!-- BTC/USD Live Price & Pulse Flash -->
+      <div class="flex items-center gap-3">
+        <div class="flex items-center gap-1.5 font-bold text-slate-200">
+          <span class="w-6 h-6 rounded-full bg-amber-500/20 text-amber-400 border border-amber-500/40 flex items-center justify-center font-mono font-bold text-[11px]">₿</span>
+          <span class="text-sm font-mono tracking-wide">BTC/USD</span>
+        </div>
+        <div id="btc-ticker-container" class="flex items-baseline gap-2 px-2.5 py-1 rounded-lg bg-slate-950/80 border border-slate-800">
+          <span id="btc-header-price" class="text-base font-bold font-mono text-emerald-400 tabular-nums transition duration-200">$67,420.00</span>
+          <span id="btc-header-change" class="text-[11px] font-semibold font-mono text-emerald-400 tabular-nums">+3.45%</span>
+        </div>
+      </div>
+
+      <!-- 24h Stats: High / Low / Volume / OFI Delta -->
+      <div class="flex flex-wrap items-center gap-4 text-[11px] font-mono text-slate-400">
+        <div>
+          <span class="text-slate-500 mr-1">24h High:</span>
+          <span id="btc-header-high" class="text-slate-200 font-semibold tabular-nums">$68,910.00</span>
+        </div>
+        <div>
+          <span class="text-slate-500 mr-1">24h Low:</span>
+          <span id="btc-header-low" class="text-slate-200 font-semibold tabular-nums">$64,820.00</span>
+        </div>
+        <div>
+          <span class="text-slate-500 mr-1">24h Volume:</span>
+          <span id="btc-header-vol" class="text-cyan-400 font-semibold tabular-nums">$1.85B</span>
+        </div>
+        <div class="hidden sm:block">
+          <span class="text-slate-500 mr-1">Vol Delta (OFI):</span>
+          <span id="btc-header-delta" class="text-emerald-400 font-semibold tabular-nums">+412 BTC</span>
+        </div>
+      </div>
+
+      <!-- Instant Quant Action: Trigger Cycle Button -->
+      <div class="flex items-center gap-2">
+        <button id="btn-trigger-cycle" class="px-3 py-1.5 rounded-lg bg-cyan-600/20 hover:bg-cyan-600/30 text-cyan-300 hover:text-cyan-200 border border-cyan-500/40 font-semibold text-xs transition flex items-center gap-1.5 shadow-sm shadow-cyan-600/20" title="Manually evaluate all 3 alphas & regime right now">
+          <i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i>
+          <span>QUANT CYCLE NOW</span>
+        </button>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- Bot Engine Control Bar -->
+  <section class="max-w-7xl mx-auto w-full px-4 lg:px-8 pt-4 pb-1">
+    <div class="glass-panel p-3.5 flex flex-wrap items-center justify-between gap-4 border-slate-800 bg-slate-900/80">
+      
+      <!-- Start/Stop Toggle & Status -->
+      <div class="flex items-center gap-3.5">
+        <button id="btn-bot-toggle" class="relative group px-4 py-2 rounded-xl font-semibold text-xs sm:text-sm transition-all duration-300 flex items-center gap-2 shadow-lg bg-emerald-600 hover:bg-emerald-500 text-white shadow-emerald-600/30">
+          <i id="btn-bot-icon" data-lucide="play" class="w-4 h-4 fill-current"></i>
+          <span id="btn-bot-label">START ENGINE</span>
+        </button>
+
+        <div class="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-950/70 border border-slate-800">
+          <span id="status-pulsing-dot" class="w-2.5 h-2.5 rounded-full bg-rose-500 pulse-stopped-red"></span>
+          <span class="text-[11px] text-slate-400 uppercase tracking-wider font-semibold">QUANT BOT:</span>
+          <span id="status-text" class="text-xs font-bold text-rose-400">STOPPED</span>
+        </div>
+
+        <!-- Strategy Pill Tags -->
+        <div class="hidden xl:flex items-center gap-2 text-[11px] text-slate-400">
+          <span class="px-2 py-0.5 rounded bg-slate-800/80 border border-slate-700/50">HMA/Donchian Trend</span>
+          <span class="px-2 py-0.5 rounded bg-slate-800/80 border border-slate-700/50">%B / VW-RSI Reversion</span>
+          <span class="px-2 py-0.5 rounded bg-slate-800/80 border border-slate-700/50">L2 OFI Imbalance</span>
+          <span class="px-2 py-0.5 rounded bg-slate-800/80 border border-slate-700/50">Fractional Kelly (0.25x)</span>
+        </div>
+      </div>
+
+      <!-- Right Action Tools: WebSocket Status & Jump to Settings -->
+      <div class="flex items-center gap-2.5">
+        <div id="ws-status" class="flex items-center gap-1.5 px-3 py-1 rounded-full bg-slate-950/80 border border-slate-800 text-[11px] text-slate-400 tabular-nums">
+          <span id="ws-dot" class="w-2 h-2 rounded-full bg-amber-400 animate-pulse"></span>
+          <span id="ws-text">WS CONNECTING</span>
+        </div>
+
+        <button id="btn-refresh" class="p-2 rounded-lg bg-slate-800/80 hover:bg-slate-700 text-slate-300 hover:text-white transition border border-slate-700" title="Refresh Live Data">
+          <i data-lucide="rotate-ccw" class="w-4 h-4"></i>
+        </button>
+
+        <button id="btn-open-settings" class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 hover:text-indigo-200 border border-indigo-500/30 transition text-xs font-medium">
+          <i data-lucide="sliders" class="w-3.5 h-3.5"></i>
+          <span>Risk Sliders</span>
+        </button>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- Main Dashboard Container -->
+  <main class="max-w-7xl mx-auto w-full px-4 lg:px-8 py-3 flex-1 space-y-5">
+
+    <!-- QUANT REGIME RADAR & MULTI-ALPHA ENSEMBLE SECTION -->
+    <section class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+      
+      <!-- 1. Market Regime Radar Card -->
+      <div id="regime-radar-card" class="glass-panel p-4 flex flex-col justify-between relative overflow-hidden">
+        <div>
+          <div class="flex items-center justify-between pb-2.5 mb-3 border-b border-slate-800">
+            <div class="flex items-center gap-2">
+              <i data-lucide="radar" class="w-4 h-4 text-cyan-400"></i>
+              <h2 class="text-xs font-bold tracking-wider uppercase text-white">Market Regime Radar</h2>
+            </div>
+            <!-- Large Glowing Status Badge -->
+            <div id="regime-badge" class="px-3 py-1 rounded-full text-xs font-bold tracking-wider regime-badge-bull flex items-center gap-1.5">
+              <span id="regime-radar-dot" class="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
+              <span id="regime-name">TRENDING BULL</span>
+            </div>
+          </div>
+
+          <!-- Radar Diagnostics Grid -->
+          <div class="grid grid-cols-2 sm:grid-cols-4 gap-2.5 text-xs mb-3">
+            <div class="p-2 rounded-lg bg-slate-950/60 border border-slate-800">
+              <div class="text-[10px] text-slate-400 uppercase font-medium">ADX (14) Trend</div>
+              <div id="regime-adx" class="text-base font-bold font-mono text-cyan-400 tabular-nums">32.4</div>
+              <div class="text-[9px] text-slate-500">Threshold &ge; 25</div>
+            </div>
+            <div class="p-2 rounded-lg bg-slate-950/60 border border-slate-800">
+              <div class="text-[10px] text-slate-400 uppercase font-medium">+DI vs -DI</div>
+              <div id="regime-di" class="text-base font-bold font-mono text-emerald-400 tabular-nums">28.5 / 14.2</div>
+              <div class="text-[9px] text-slate-500">Bullish Spread</div>
+            </div>
+            <div class="p-2 rounded-lg bg-slate-950/60 border border-slate-800">
+              <div class="text-[10px] text-slate-400 uppercase font-medium">BB Width Pct</div>
+              <div id="regime-bbw" class="text-base font-bold font-mono text-amber-400 tabular-nums">78th Pct</div>
+              <div class="text-[9px] text-slate-500">Expanding Band</div>
+            </div>
+            <div class="p-2 rounded-lg bg-slate-950/60 border border-slate-800">
+              <div class="text-[10px] text-slate-400 uppercase font-medium">ATR Volatility</div>
+              <div id="regime-atr" class="text-base font-bold font-mono text-purple-400 tabular-nums">$842.10</div>
+              <div class="text-[9px] text-slate-500">91st Historical Pct</div>
+            </div>
+          </div>
+
+          <!-- Dynamic Strategy Weights Blended by Regime -->
+          <div>
+            <div class="flex justify-between text-[11px] text-slate-400 mb-1.5">
+              <span>Dynamic Strategy Weight Allocation:</span>
+              <span id="regime-weights-label" class="font-mono text-slate-200">60% Trend | 10% MeanRev | 30% OFI</span>
+            </div>
+            <div class="w-full h-2 rounded-full bg-slate-800 flex overflow-hidden">
+              <div id="bar-weight-trend" class="bg-cyan-500 h-full" style="width: 60%;" title="Trend Alpha Weight"></div>
+              <div id="bar-weight-mr" class="bg-amber-500 h-full" style="width: 10%;" title="Mean Reversion Weight"></div>
+              <div id="bar-weight-ofi" class="bg-emerald-500 h-full" style="width: 30%;" title="Order Flow Imbalance Weight"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 2. Multi-Alpha Signal Matrix Card -->
+      <div id="multi-alpha-card" class="glass-panel p-4 flex flex-col justify-between relative overflow-hidden">
+        <div>
+          <div class="flex items-center justify-between pb-2.5 mb-3 border-b border-slate-800">
+            <div class="flex items-center gap-2">
+              <i data-lucide="layers" class="w-4 h-4 text-emerald-400"></i>
+              <h2 class="text-xs font-bold tracking-wider uppercase text-white">Multi-Alpha Signal Matrix</h2>
+            </div>
+            <!-- Composite Signal Score & Direction -->
+            <div class="flex items-center gap-2">
+              <span class="text-[11px] text-slate-400 uppercase font-medium">Composite:</span>
+              <span id="composite-score" class="text-xs font-bold font-mono text-emerald-400 tabular-nums">+74.5%</span>
+              <span id="composite-badge" class="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
+                STRONG BUY
+              </span>
+            </div>
+          </div>
+
+          <!-- 3 Institutional Alphas Gauges -->
+          <div class="space-y-2.5 text-xs">
+            
+            <!-- Alpha 1: Trend / Momentum (HMA + Donchian) -->
+            <div>
+              <div class="flex justify-between items-center text-[11px] mb-1">
+                <span class="font-medium text-slate-300">Alpha 1: Adaptive Trend / Momentum (HMA/Donchian)</span>
+                <span id="alpha-trend-val" class="font-mono font-bold text-emerald-400 tabular-nums">+0.82 (+82%)</span>
+              </div>
+              <div class="alpha-meter-track">
+                <div class="alpha-meter-center"></div>
+                <div id="alpha-trend-bar-pos" class="alpha-meter-fill-pos" style="width: 41%;"></div>
+                <div id="alpha-trend-bar-neg" class="alpha-meter-fill-neg" style="width: 0%;"></div>
+              </div>
+            </div>
+
+            <!-- Alpha 2: Mean Reversion (%B + VW-RSI) -->
+            <div>
+              <div class="flex justify-between items-center text-[11px] mb-1">
+                <span class="font-medium text-slate-300">Alpha 2: Mean Reversion (%B &amp; VW-RSI)</span>
+                <span id="alpha-mr-val" class="font-mono font-bold text-amber-400 tabular-nums">-0.14 (-14%)</span>
+              </div>
+              <div class="alpha-meter-track">
+                <div class="alpha-meter-center"></div>
+                <div id="alpha-mr-bar-pos" class="alpha-meter-fill-pos" style="width: 0%;"></div>
+                <div id="alpha-mr-bar-neg" class="alpha-meter-fill-neg" style="width: 7%;"></div>
+              </div>
+            </div>
+
+            <!-- Alpha 3: Microstructure & Order Flow Imbalance (OFI) -->
+            <div>
+              <div class="flex justify-between items-center text-[11px] mb-1">
+                <span class="font-medium text-slate-300">Alpha 3: Order Flow Imbalance &amp; Volume Delta</span>
+                <span id="alpha-ofi-val" class="font-mono font-bold text-cyan-400 tabular-nums">+0.68 (+68%)</span>
+              </div>
+              <div class="alpha-meter-track">
+                <div class="alpha-meter-center"></div>
+                <div id="alpha-ofi-bar-pos" class="alpha-meter-fill-pos" style="width: 34%;"></div>
+                <div id="alpha-ofi-bar-neg" class="alpha-meter-fill-neg" style="width: 0%;"></div>
+              </div>
+            </div>
+
+          </div>
+
+          <div class="mt-3 pt-2 border-t border-slate-800/80 flex items-center justify-between text-[11px] text-slate-400">
+            <span>Ensemble Confidence: <span id="composite-confidence" class="text-slate-200 font-bold font-mono">86.4%</span></span>
+            <span class="text-slate-500">Sizing: <span class="text-cyan-400 font-mono">Fractional Kelly Scaled</span></span>
+          </div>
+        </div>
+      </div>
+
+    </section>
+
+    <!-- INSTITUTIONAL RISK & PERFORMANCE KPI CARDS (8 CARDS) -->
+    <section class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-3">
+      
+      <!-- 1. Portfolio Equity -->
+      <div class="glass-panel p-3 flex flex-col justify-between relative overflow-hidden group hover:border-cyan-500/50">
+        <div class="flex items-center justify-between text-slate-400 mb-1">
+          <span class="text-[10px] font-semibold tracking-wide uppercase">Equity</span>
+          <i data-lucide="wallet" class="w-3.5 h-3.5 text-cyan-400"></i>
+        </div>
+        <div>
+          <div id="kpi-equity" class="text-base sm:text-lg font-bold tracking-tight text-white tabular-nums">$100,000</div>
+          <div id="kpi-equity-change" class="text-[10px] font-medium text-emerald-400 mt-0.5 tabular-nums">+$0.00</div>
+        </div>
+        <div class="absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-cyan-500 to-indigo-500 opacity-60"></div>
+      </div>
+
+      <!-- 2. Daily P&L -->
+      <div class="glass-panel p-3 flex flex-col justify-between relative overflow-hidden group hover:border-emerald-500/50">
+        <div class="flex items-center justify-between text-slate-400 mb-1">
+          <span class="text-[10px] font-semibold tracking-wide uppercase">Daily P&amp;L</span>
+          <i data-lucide="trending-up" class="w-3.5 h-3.5 text-emerald-400"></i>
+        </div>
+        <div>
+          <div id="kpi-daily-pnl" class="text-base sm:text-lg font-bold tracking-tight text-emerald-400 tabular-nums">+$2,450</div>
+          <div id="kpi-daily-pnl-pct" class="text-[10px] font-medium text-emerald-400 mt-0.5 tabular-nums">+2.45%</div>
+        </div>
+        <div id="pnl-accent-bar" class="absolute bottom-0 left-0 right-0 h-0.5 bg-emerald-500 opacity-60"></div>
+      </div>
+
+      <!-- 3. Sortino Ratio (Institutional Downside Metric) -->
+      <div class="glass-panel p-3 flex flex-col justify-between relative overflow-hidden group hover:border-emerald-500/50">
+        <div class="flex items-center justify-between text-slate-400 mb-1">
+          <span class="text-[10px] font-semibold tracking-wide uppercase">Sortino</span>
+          <i data-lucide="shield-check" class="w-3.5 h-3.5 text-emerald-400"></i>
+        </div>
+        <div>
+          <div id="kpi-sortino" class="text-base sm:text-lg font-bold tracking-tight text-emerald-400 tabular-nums">2.84</div>
+          <div class="text-[10px] text-slate-500 mt-0.5">Downside Risk Adj</div>
+        </div>
+        <div class="absolute bottom-0 left-0 right-0 h-0.5 bg-emerald-500 opacity-60"></div>
+      </div>
+
+      <!-- 4. Sharpe Ratio -->
+      <div class="glass-panel p-3 flex flex-col justify-between relative overflow-hidden group hover:border-cyan-500/50">
+        <div class="flex items-center justify-between text-slate-400 mb-1">
+          <span class="text-[10px] font-semibold tracking-wide uppercase">Sharpe</span>
+          <i data-lucide="activity" class="w-3.5 h-3.5 text-cyan-400"></i>
+        </div>
+        <div>
+          <div id="kpi-sharpe" class="text-base sm:text-lg font-bold tracking-tight text-cyan-400 tabular-nums">2.15</div>
+          <div class="text-[10px] text-slate-500 mt-0.5">Annualized Vol Adj</div>
+        </div>
+        <div class="absolute bottom-0 left-0 right-0 h-0.5 bg-cyan-500 opacity-60"></div>
+      </div>
+
+      <!-- 5. Calmar Ratio -->
+      <div class="glass-panel p-3 flex flex-col justify-between relative overflow-hidden group hover:border-indigo-500/50">
+        <div class="flex items-center justify-between text-slate-400 mb-1">
+          <span class="text-[10px] font-semibold tracking-wide uppercase">Calmar</span>
+          <i data-lucide="compass" class="w-3.5 h-3.5 text-indigo-400"></i>
+        </div>
+        <div>
+          <div id="kpi-calmar" class="text-base sm:text-lg font-bold tracking-tight text-indigo-400 tabular-nums">3.42</div>
+          <div class="text-[10px] text-slate-500 mt-0.5">Return / Max DD</div>
+        </div>
+        <div class="absolute bottom-0 left-0 right-0 h-0.5 bg-indigo-500 opacity-60"></div>
+      </div>
+
+      <!-- 6. Win Rate -->
+      <div class="glass-panel p-3 flex flex-col justify-between relative overflow-hidden group hover:border-amber-500/50">
+        <div class="flex items-center justify-between text-slate-400 mb-1">
+          <span class="text-[10px] font-semibold tracking-wide uppercase">Win Rate</span>
+          <i data-lucide="award" class="w-3.5 h-3.5 text-amber-400"></i>
+        </div>
+        <div>
+          <div id="kpi-win-rate" class="text-base sm:text-lg font-bold tracking-tight text-white tabular-nums">68.4%</div>
+          <div class="w-full bg-slate-800 rounded-full h-1 mt-1.5 overflow-hidden">
+            <div id="win-rate-bar" class="bg-gradient-to-r from-emerald-500 to-cyan-400 h-1 rounded-full" style="width: 68.4%"></div>
+          </div>
+        </div>
+        <div class="absolute bottom-0 left-0 right-0 h-0.5 bg-amber-500 opacity-60"></div>
+      </div>
+
+      <!-- 7. Profit Factor -->
+      <div class="glass-panel p-3 flex flex-col justify-between relative overflow-hidden group hover:border-purple-500/50">
+        <div class="flex items-center justify-between text-slate-400 mb-1">
+          <span class="text-[10px] font-semibold tracking-wide uppercase">Profit Factor</span>
+          <i data-lucide="bar-chart-2" class="w-3.5 h-3.5 text-purple-400"></i>
+        </div>
+        <div>
+          <div id="kpi-profit-factor" class="text-base sm:text-lg font-bold tracking-tight text-purple-400 tabular-nums">2.38</div>
+          <div class="text-[10px] text-slate-400 mt-0.5">Trades: <span id="kpi-total-trades" class="text-slate-200 font-semibold font-mono">24</span></div>
+        </div>
+        <div class="absolute bottom-0 left-0 right-0 h-0.5 bg-purple-500 opacity-60"></div>
+      </div>
+
+      <!-- 8. Max Drawdown -->
+      <div class="glass-panel p-3 flex flex-col justify-between relative overflow-hidden group hover:border-rose-500/50">
+        <div class="flex items-center justify-between text-slate-400 mb-1">
+          <span class="text-[10px] font-semibold tracking-wide uppercase">Max DD</span>
+          <i data-lucide="shield-alert" class="w-3.5 h-3.5 text-rose-400"></i>
+        </div>
+        <div>
+          <div id="kpi-max-drawdown" class="text-base sm:text-lg font-bold tracking-tight text-rose-400 tabular-nums">-3.82%</div>
+          <div class="text-[10px] text-slate-500 mt-0.5">Peak-to-Trough</div>
+        </div>
+        <div class="absolute bottom-0 left-0 right-0 h-0.5 bg-rose-500 opacity-60"></div>
+      </div>
+
+    </section>
+
+    <!-- CHARTS & ORDER BOOK MICROSTRUCTURE SECTION -->
+    <section class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+      
+      <!-- Interactive Strategy Chart (2 Cols on lg) -->
+      <div class="lg:col-span-2 glass-panel p-4 flex flex-col justify-between">
+        <div class="flex flex-wrap items-center justify-between gap-3 mb-3">
+          
+          <!-- View Switcher Tabs -->
+          <div class="flex items-center bg-slate-950/90 p-1 rounded-lg border border-slate-800 text-xs">
+            <button id="tab-chart-strategy" class="chart-tab active px-3 py-1 rounded font-semibold bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 transition flex items-center gap-1.5">
+              <i data-lucide="trending-up" class="w-3.5 h-3.5"></i>
+              <span>BTC/USD Strategy &bull; Bollinger + Chandelier Stop</span>
+            </button>
+            <button id="tab-chart-equity" class="chart-tab px-3 py-1 rounded font-medium text-slate-400 hover:text-white transition flex items-center gap-1.5">
+              <i data-lucide="line-chart" class="w-3.5 h-3.5"></i>
+              <span>Portfolio Equity &amp; Underwater DD</span>
+            </button>
+          </div>
+
+          <!-- Time Range Buttons -->
+          <div class="flex items-center bg-slate-950/80 p-0.5 rounded-lg border border-slate-800 text-[11px]">
+            <button data-range="1M" class="time-range-btn px-2 py-0.5 rounded font-medium text-slate-400 hover:text-white transition">1M</button>
+            <button data-range="5M" class="time-range-btn px-2 py-0.5 rounded font-medium text-slate-400 hover:text-white transition">5M</button>
+            <button data-range="15M" class="time-range-btn px-2 py-0.5 rounded font-medium text-slate-400 hover:text-white transition">15M</button>
+            <button data-range="1H" class="time-range-btn px-2 py-0.5 rounded font-medium text-slate-400 hover:text-white transition">1H</button>
+            <button data-range="1D" class="time-range-btn active px-2 py-0.5 rounded font-medium bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 transition">1D</button>
+            <button data-range="ALL" class="time-range-btn px-2 py-0.5 rounded font-medium text-slate-400 hover:text-white transition">ALL</button>
+          </div>
+        </div>
+
+        <!-- Strategy Chart Container -->
+        <div id="container-strategy-chart" class="relative w-full h-[320px]">
+          <canvas id="cryptoStrategyChart"></canvas>
+        </div>
+
+        <!-- Equity Chart Container (Hidden by default, shown via Tab) -->
+        <div id="container-equity-chart" class="relative w-full h-[320px] hidden">
+          <canvas id="equityChart"></canvas>
+        </div>
+
+        <!-- Legend / Indicators Sub-bar -->
+        <div class="mt-2 pt-2 border-t border-slate-800/80 flex flex-wrap items-center justify-between text-[11px] text-slate-400">
+          <div class="flex flex-wrap items-center gap-3">
+            <span class="flex items-center gap-1.5"><span class="w-2.5 h-0.5 bg-cyan-400"></span> BTC Price</span>
+            <span class="flex items-center gap-1.5"><span class="w-2.5 h-0.5 bg-amber-400 border-b border-dashed"></span> Bollinger Upper/Lower</span>
+            <span class="flex items-center gap-1.5"><span class="w-2.5 h-0.5 bg-emerald-400"></span> Chandelier Trailing Stop</span>
+            <span class="flex items-center gap-1.5"><span class="w-2.5 h-0.5 bg-indigo-400"></span> EMA(50) Trend Baseline</span>
+          </div>
+          <span class="text-slate-500">Live Tick Updating Every 1s</span>
+        </div>
+      </div>
+
+      <!-- Order Book Depth Meter Card (1 Col on lg) -->
+      <div class="glass-panel p-4 flex flex-col justify-between">
+        <div>
+          <div class="flex items-center justify-between pb-2.5 mb-3 border-b border-slate-800">
+            <div class="flex items-center gap-2">
+              <i data-lucide="bar-chart" class="w-4 h-4 text-cyan-400"></i>
+              <h2 class="text-xs font-bold tracking-wider uppercase text-white">Order Book Depth &bull; L2</h2>
+            </div>
+            <!-- Spread Display -->
+            <div class="text-[11px] font-mono text-slate-300">
+              Spread: <span id="ob-spread" class="text-amber-400 font-bold">$1.50 (0.22 bps)</span>
+            </div>
+          </div>
+
+          <!-- Bid vs Ask Total Depth Comparison Bar -->
+          <div class="mb-3">
+            <div class="flex justify-between text-[11px] font-mono mb-1">
+              <span class="text-emerald-400 font-semibold">Bids: <span id="ob-bid-pct">58.2%</span></span>
+              <span class="text-rose-400 font-semibold">Asks: <span id="ob-ask-pct">41.8%</span></span>
+            </div>
+            <div class="w-full h-2 rounded-full bg-slate-800 flex overflow-hidden">
+              <div id="ob-depth-bid-bar" class="bg-emerald-500 h-full transition-all duration-300" style="width: 58.2%;"></div>
+              <div id="ob-depth-ask-bar" class="bg-rose-500 h-full transition-all duration-300" style="width: 41.8%;"></div>
+            </div>
+          </div>
+
+          <!-- Order Book Depth Ladder: Asks on top (descending), Bids on bottom -->
+          <div class="space-y-1 font-mono text-[11px]">
+            <div class="text-[10px] text-slate-500 uppercase flex justify-between px-2 pb-1 border-b border-slate-800">
+              <span>Price (USD)</span>
+              <span>Size (BTC)</span>
+              <span>Total</span>
+            </div>
+            
+            <!-- Asks (Red) List (Top 5) -->
+            <div id="ob-asks-list" class="space-y-0.5">
+              <!-- Dynamically populated -->
+            </div>
+
+            <!-- Mid Price Divider -->
+            <div class="py-1 px-2 my-1 rounded bg-slate-950/80 border border-slate-800/80 flex items-center justify-between text-xs font-bold">
+              <span class="text-slate-400 font-sans text-[10px] uppercase">Mid Market Price</span>
+              <span id="ob-mid-price" class="text-white">$67,420.00</span>
+            </div>
+
+            <!-- Bids (Green) List (Top 5) -->
+            <div id="ob-bids-list" class="space-y-0.5">
+              <!-- Dynamically populated -->
+            </div>
+          </div>
+        </div>
+
+        <div class="mt-3 pt-2 border-t border-slate-800 flex items-center justify-between text-[10px] text-slate-400">
+          <span>OFI Imbalance: <span id="ob-ofi-ratio" class="text-emerald-400 font-bold font-mono">+16.4% Buy Pressure</span></span>
+          <span class="text-slate-500">Synthetic Microstructure</span>
+        </div>
+      </div>
+
+    </section>
+
+    <!-- LIVE TABLES: Active Positions & Executed Trades -->
+    <section class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+      
+      <!-- Active Positions Card -->
+      <div class="glass-panel p-4 flex flex-col">
+        <div class="flex items-center justify-between mb-3 pb-2.5 border-b border-slate-800">
+          <div class="flex items-center gap-2">
+            <i data-lucide="shield" class="w-4 h-4 text-emerald-400"></i>
+            <h2 class="text-xs font-bold tracking-wider uppercase text-white">Active Crypto Positions</h2>
+            <span id="positions-count-badge" class="px-2 py-0.2 rounded-full text-[10px] font-bold bg-slate-800 text-slate-300 border border-slate-700">0</span>
+          </div>
+          <div class="text-xs text-slate-400">
+            Total Exposure: <span id="positions-total-value" class="text-slate-200 font-semibold tabular-nums">$0.00</span>
+          </div>
+        </div>
+
+        <!-- Table Container -->
+        <div class="overflow-x-auto flex-1 max-h-[300px]">
+          <table class="w-full text-left text-xs border-collapse">
+            <thead>
+              <tr class="text-slate-400 border-b border-slate-800 sticky top-0 bg-slate-900/95 backdrop-blur z-10 text-[11px]">
+                <th class="py-2 px-2.5">Symbol</th>
+                <th class="py-2 px-2">Side</th>
+                <th class="py-2 px-2 text-right">Size</th>
+                <th class="py-2 px-2.5 text-right">Entry</th>
+                <th class="py-2 px-2.5 text-right">Current</th>
+                <th class="py-2 px-2 text-right">Chandelier Stop</th>
+                <th class="py-2 px-2.5 text-right">P&amp;L</th>
+                <th class="py-2 px-2 text-center">Action</th>
+              </tr>
+            </thead>
+            <tbody id="positions-table-body" class="divide-y divide-slate-800/50 tabular-nums">
+              <tr>
+                <td colspan="8" class="py-10 text-center text-slate-500">
+                  <i data-lucide="inbox" class="w-7 h-7 mx-auto mb-1.5 opacity-40"></i>
+                  No active crypto positions. Quantitative engine scanning regime...
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Executed Quantitative Trades Card -->
+      <div class="glass-panel p-4 flex flex-col">
+        <div class="flex items-center justify-between mb-3 pb-2.5 border-b border-slate-800">
+          <div class="flex items-center gap-2">
+            <i data-lucide="history" class="w-4 h-4 text-indigo-400"></i>
+            <h2 class="text-xs font-bold tracking-wider uppercase text-white">Executed Quant Trades</h2>
+            <span id="trades-count-badge" class="px-2 py-0.2 rounded-full text-[10px] font-bold bg-slate-800 text-slate-300 border border-slate-700">0</span>
+          </div>
+          <span class="text-xs text-slate-400">Chandelier Trailing Log</span>
+        </div>
+
+        <!-- Table Container -->
+        <div class="overflow-x-auto flex-1 max-h-[300px]">
+          <table class="w-full text-left text-xs border-collapse">
+            <thead>
+              <tr class="text-slate-400 border-b border-slate-800 sticky top-0 bg-slate-900/95 backdrop-blur z-10 text-[11px]">
+                <th class="py-2 px-2.5">Time</th>
+                <th class="py-2 px-2">Symbol</th>
+                <th class="py-2 px-2">Side</th>
+                <th class="py-2 px-2 text-right">Size</th>
+                <th class="py-2 px-2 text-right">Entry</th>
+                <th class="py-2 px-2 text-right">Exit</th>
+                <th class="py-2 px-2.5 text-right">P&amp;L</th>
+                <th class="py-2 px-2 text-center">Status</th>
+              </tr>
+            </thead>
+            <tbody id="trades-table-body" class="divide-y divide-slate-800/50 tabular-nums">
+              <tr>
+                <td colspan="8" class="py-10 text-center text-slate-500">
+                  <i data-lucide="activity" class="w-7 h-7 mx-auto mb-1.5 opacity-40"></i>
+                  No trade history yet.
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+    </section>
+
+    <!-- BOTTOM ROW: Strategy & Risk Config Sliders + Real-Time Crypto Log Console -->
+    <section class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+      
+      <!-- Strategy & Kelly Risk Configuration Card (1 Col) -->
+      <div id="risk-config-panel" class="glass-panel p-4 flex flex-col justify-between">
+        <div>
+          <div class="flex items-center justify-between mb-3 pb-2.5 border-b border-slate-800">
+            <div class="flex items-center gap-2">
+              <i data-lucide="sliders" class="w-4 h-4 text-cyan-400"></i>
+              <h2 class="text-xs font-bold tracking-wider uppercase text-white">Institutional Risk &amp; Sizing</h2>
+            </div>
+            <span class="text-[10px] font-mono text-cyan-400 bg-cyan-950/80 px-2 py-0.5 rounded border border-cyan-800/50">FRACTIONAL KELLY</span>
+          </div>
+
+          <form id="config-form" class="space-y-3.5 text-xs">
+            <!-- Fractional Kelly Sizing Factor -->
+            <div>
+              <div class="flex justify-between mb-1 font-medium">
+                <span class="text-slate-300">Kelly Fraction (f* multiplier):</span>
+                <span id="label-kelly" class="text-cyan-400 font-bold font-mono">0.25x (Quarter-Kelly)</span>
+              </div>
+              <input type="range" id="input-kelly" min="0.10" max="0.50" step="0.05" value="0.25" class="w-full">
+              <p class="text-[10px] text-slate-500 mt-0.5">Scales optimal bet fraction to eliminate ruin risk while maximizing compounding.</p>
+            </div>
+
+            <!-- Risk % per trade -->
+            <div>
+              <div class="flex justify-between mb-1 font-medium">
+                <span class="text-slate-300">Max Risk % Per Trade:</span>
+                <span id="label-risk-pct" class="text-cyan-400 font-bold font-mono">1.0%</span>
+              </div>
+              <input type="range" id="input-risk-pct" min="0.2" max="3.0" step="0.1" value="1.0" class="w-full">
+            </div>
+
+            <!-- Chandelier ATR Stop Multiplier -->
+            <div>
+              <div class="flex justify-between mb-1 font-medium">
+                <span class="text-slate-300">Chandelier ATR Multiplier:</span>
+                <span id="label-chandelier-atr" class="text-cyan-400 font-bold font-mono">3.0x ATR</span>
+              </div>
+              <input type="range" id="input-chandelier-atr" min="1.5" max="5.0" step="0.5" value="3.0" class="w-full">
+              <p class="text-[10px] text-slate-500 mt-0.5">Dynamic trailing exit distance from highest peak.</p>
+            </div>
+
+            <!-- Max Open Positions -->
+            <div>
+              <div class="flex justify-between mb-1 font-medium">
+                <span class="text-slate-300">Max Open Crypto Positions:</span>
+                <span id="label-max-pos" class="text-cyan-400 font-bold font-mono">3</span>
+              </div>
+              <input type="range" id="input-max-pos" min="1" max="5" step="1" value="3" class="w-full">
+            </div>
+
+            <!-- Active Crypto Pairs -->
+            <div>
+              <label class="block text-slate-300 font-medium mb-1">Active Trading Pairs:</label>
+              <input type="text" id="input-symbols" value="BTC/USD, ETH/USD" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-white font-mono uppercase focus:border-cyan-500 focus:outline-none transition text-xs">
+            </div>
+
+            <!-- Save Button -->
+            <button type="submit" id="btn-save-config" class="w-full py-2 rounded-lg bg-gradient-to-r from-cyan-600 to-indigo-600 hover:from-cyan-500 hover:to-indigo-500 text-white font-semibold transition flex items-center justify-center gap-2 shadow-lg shadow-cyan-600/20 text-xs">
+              <i data-lucide="save" class="w-3.5 h-3.5"></i>
+              <span>APPLY QUANT RISK PARAMETERS</span>
+            </button>
+          </form>
+        </div>
+      </div>
+
+      <!-- Real-Time Crypto Quant Log Terminal (2 Cols) -->
+      <div class="lg:col-span-2 glass-panel p-4 flex flex-col justify-between">
+        <div>
+          <div class="flex flex-wrap items-center justify-between gap-2 mb-2.5 pb-2.5 border-b border-slate-800">
+            <div class="flex items-center gap-2">
+              <i data-lucide="terminal" class="w-4 h-4 text-emerald-400"></i>
+              <h2 class="text-xs font-bold tracking-wider uppercase text-white">Live Crypto Quant Terminal Log</h2>
+            </div>
+
+            <!-- Controls: Auto-Scroll, Clear, Level Filter -->
+            <div class="flex items-center gap-2 text-xs">
+              <select id="log-filter" class="bg-slate-950 border border-slate-800 rounded px-2 py-0.5 text-slate-300 focus:outline-none text-[11px]">
+                <option value="ALL">All Categories</option>
+                <option value="REGIME">Regime Transitions</option>
+                <option value="ALPHA">Alpha Signals</option>
+                <option value="OFI">Order Flow (OFI)</option>
+                <option value="KELLY">Kelly Sizing</option>
+                <option value="CHANDELIER">Chandelier Stops</option>
+                <option value="BUY">BUY Signals</option>
+                <option value="SELL">SELL / Exits</option>
+                <option value="RISK">Risk Manager</option>
+                <option value="INFO">Info</option>
+                <option value="WARN">Warnings</option>
+              </select>
+
+              <button id="btn-toggle-autoscroll" class="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 flex items-center gap-1 text-[11px]" title="Toggle Auto-Scroll">
+                <span class="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
+                <span id="label-autoscroll">Auto-scroll</span>
+              </button>
+
+              <button id="btn-clear-logs" class="p-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white border border-slate-700" title="Clear Logs">
+                <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
+              </button>
+            </div>
+          </div>
+
+          <!-- Console Window -->
+          <div id="terminal-console" class="terminal-window rounded-lg p-2.5 font-mono text-[11px] leading-relaxed h-[290px] overflow-y-auto space-y-1 select-text">
+            <div class="text-slate-500 italic">[SYSTEM] Crypto Quant Terminal initialized. Connecting to WebSocket feed...</div>
+          </div>
+        </div>
+      </div>
+
+    </section>
+
+  </main>
+
+  <!-- Footer -->
+  <footer class="border-t border-slate-800/80 bg-slate-950/70 py-3 px-4 text-center text-xs text-slate-500">
+    <div class="max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-2">
+      <div class="flex items-center gap-2">
+        <span>Institutional Crypto Quantitative Trading Terminal</span>
+        <span>&bull;</span>
+        <span class="text-amber-400 font-mono">Bitcoin 24/7 Engine</span>
+      </div>
+      <div>
+        <span>Status: <span id="footer-status" class="text-slate-300 font-medium">Ready</span></span>
+      </div>
+    </div>
+  </footer>
+
+  <!-- App JavaScript -->
+  <script src="/static/app.js"></script>
+</body>
+</html>

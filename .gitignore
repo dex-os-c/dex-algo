@@ -1,0 +1,22 @@
+# Environments and Secrets
+.env
+venv/
+ENV/
+env/
+
+# Databases and Local Artifacts
+*.db
+*.sqlite
+*.sqlite3
+backend/backtest_results.json
+
+# Python bytecode & cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+
+# OS artifacts
+.DS_Store
+Thumbs.db
