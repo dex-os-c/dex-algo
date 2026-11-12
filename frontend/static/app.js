@@ -153,12 +153,13 @@ let underwaterChart = null;
 
 // Initialize on DOM Ready
 document.addEventListener('DOMContentLoaded', () => {
-  initIcons();
-  startServerClock();
-  initCharts();
-  connectWebSocket();
-  refreshAllData();
-  loadWfoSummary();
+  try { initIcons(); } catch (e) { console.warn('initIcons error:', e); }
+  try { startServerClock(); } catch (e) { console.warn('startServerClock error:', e); }
+  try { initCharts(); } catch (e) { console.warn('initCharts error:', e); }
+  try { connectWebSocket(); } catch (e) { console.warn('connectWebSocket error:', e); }
+  try { refreshAllData(); } catch (e) { console.warn('refreshAllData error:', e); }
+  try { loadWfoSummary(); } catch (e) { console.warn('loadWfoSummary error:', e); }
+  try { updateQtEstimate(); } catch (e) { console.warn('updateQtEstimate error:', e); }
 
   // Set periodic data sync
   setInterval(() => {
@@ -353,10 +354,13 @@ async function fetchApi(endpoint, options = {}) {
       headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
       ...options
     });
-    if (!res.ok) return null;
-    return await res.json();
+    const data = await res.json().catch(() => null);
+    if (!res.ok) {
+      return data || { status: 'error', detail: `HTTP ${res.status}: ${res.statusText}` };
+    }
+    return data;
   } catch (e) {
-    return null;
+    return { status: 'error', detail: e.message };
   }
 }
 
@@ -374,16 +378,21 @@ async function refreshAllData(silent = false) {
     fetchApi('/api/decisions?limit=15')
   ]);
 
-  if (status) updateStatus(status);
-  if (cryptoState) updateActiveQuote(cryptoState);
-  if (regime) updateRegime(regime);
-  if (alphas) updateAlphas(alphas);
-  if (ob) updateOrderBook(ob);
-  if (account) updateAccount(account);
-  if (positions) updatePositions(positions);
-  if (orders) updateOrders(orders);
-  if (wfo) updateWfo(wfo);
-  if (decisions) updateDecisions(decisions);
+  if (status && status.status !== 'error') updateStatus(status);
+  if (cryptoState && cryptoState.status !== 'error') updateActiveQuote(cryptoState);
+  if (regime && regime.status !== 'error') updateRegime(regime);
+  if (alphas && alphas.status !== 'error') updateAlphas(alphas);
+  if (ob && ob.status !== 'error') updateOrderBook(ob);
+  if (account && account.status !== 'error') updateAccount(account);
+  if (positions && positions.status !== 'error') updatePositions(positions);
+  if (orders && orders.status !== 'error') updateOrders(orders);
+  if (wfo && wfo.status !== 'error') updateWfo(wfo);
+  if (decisions && decisions.status !== 'error') updateDecisions(decisions);
+
+  // Periodically keep candlestick chart synced
+  if (!silent && window.candlestickChart && typeof window.candlestickChart.loadBars === 'function') {
+    window.candlestickChart.loadBars(state.activeSymbol, state.activeChartTf || '1h');
+  }
 }
 
 // =============================================================================
@@ -1211,9 +1220,9 @@ class CandlestickChartEngine {
     this.timeframe = (window.state && window.state.activeChartTf) || '1h';
     this.overlays = {
       kama: true,
-      bbands: true,
+      bbands: false,
       ratchet: true,
-      vwap: true
+      vwap: false
     };
     this.hoverIndex = null;
     this.hoverX = null;
@@ -1239,15 +1248,21 @@ class CandlestickChartEngine {
   }
 
   setupResize() {
-    if (window.ResizeObserver && this.canvas.parentElement) {
-      this.resizeObserver = new ResizeObserver(() => {
-        this.render();
-      });
-      this.resizeObserver.observe(this.canvas.parentElement);
-      this.resizeObserver.observe(this.canvas);
+    if (typeof window !== 'undefined' && typeof window.ResizeObserver !== 'undefined' && this.canvas && this.canvas.parentElement) {
+      try {
+        this.resizeObserver = new window.ResizeObserver(() => {
+          this.render();
+        });
+        this.resizeObserver.observe(this.canvas.parentElement);
+        this.resizeObserver.observe(this.canvas);
+      } catch (e) {
+        console.warn('ResizeObserver warning:', e);
+      }
     }
-    window.addEventListener('resize', () => this.render());
-    window.addEventListener('load', () => this.render());
+    if (typeof window !== 'undefined') {
+      window.addEventListener('resize', () => this.render());
+      window.addEventListener('load', () => this.render());
+    }
   }
 
   setupEvents() {
@@ -1772,7 +1787,7 @@ class CandlestickChartEngine {
 
       // Centered Upper and Lower Wicks
       ctx.strokeStyle = color;
-      ctx.lineWidth = 1.2;
+      ctx.lineWidth = 1.5;
       ctx.beginPath();
       ctx.moveTo(xCenter, yHigh);
       ctx.lineTo(xCenter, yLow);
@@ -1781,7 +1796,7 @@ class CandlestickChartEngine {
       // Candle Real Body
       const bodyTop = Math.min(yOpen, yClose);
       const bodyBottom = Math.max(yOpen, yClose);
-      const bodyH = Math.max(2.0, bodyBottom - bodyTop);
+      const bodyH = Math.max(2.5, bodyBottom - bodyTop);
       const bodyX = Math.round(xCenter - barWidth / 2);
 
       ctx.fillStyle = color;
@@ -1884,95 +1899,109 @@ class CandlestickChartEngine {
 // =============================================================================
 
 function initCharts() {
-  // 1. Primary Strategy Candlestick Chart
-  const ctxStrategy = document.getElementById('main-strategy-chart');
-  if (ctxStrategy) {
-    window.candlestickChart = new CandlestickChartEngine('main-strategy-chart');
-  }
-
-  // 2. Portfolio Equity Curve Chart
-  const ctxEquity = document.getElementById('equity-chart');
-  if (ctxEquity) {
-    const eqLabels = Array.from({ length: 30 }, (_, i) => `D${i + 1}`);
-    const eqData = [100000];
-    for (let i = 1; i < 30; i++) {
-      eqData.push(Math.round(eqData[i - 1] * (1 + (Math.random() - 0.44) * 0.008)));
+  // 1. Primary Strategy Candlestick Chart (Always initialize first and isolate from external libs)
+  try {
+    const ctxStrategy = document.getElementById('main-strategy-chart');
+    if (ctxStrategy) {
+      window.candlestickChart = new CandlestickChartEngine('main-strategy-chart');
     }
-    equityChart = new Chart(ctxEquity, {
-      type: 'line',
-      data: {
-        labels: eqLabels,
-        datasets: [{
-          label: 'Portfolio Equity ($)',
-          data: eqData,
-          borderColor: '#0fa968',
-          backgroundColor: 'rgba(15, 169, 104, 0.08)',
-          fill: true,
-          borderWidth: 1.8,
-          pointRadius: 0,
-          tension: 0.15
-        }]
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: {
-          legend: { display: false },
-          tooltip: {
-            backgroundColor: '#181c22',
-            borderColor: '#1f232d',
-            borderWidth: 1,
-            titleFont: { family: 'JetBrains Mono', size: 11 },
-            bodyFont: { family: 'JetBrains Mono', size: 10 }
-          }
-        },
-        scales: {
-          x: { grid: { color: 'rgba(255, 255, 255, 0.03)' }, ticks: { color: '#57606a', font: { family: 'JetBrains Mono', size: 9 } } },
-          y: { position: 'right', grid: { color: 'rgba(255, 255, 255, 0.04)' }, ticks: { color: '#8b949e', font: { family: 'JetBrains Mono', size: 10 }, callback: v => '$' + v.toLocaleString() } }
-        }
-      }
-    });
+  } catch (err) {
+    console.error('Failed to initialize CandlestickChartEngine:', err);
   }
 
-  // 3. Underwater Drawdown Chart
-  const ctxUnderwater = document.getElementById('underwater-chart');
-  if (ctxUnderwater) {
-    const uwLabels = Array.from({ length: 30 }, (_, i) => `D${i + 1}`);
-    const uwData = Array.from({ length: 30 }, () => -(Math.random() * 2.8).toFixed(2));
-    underwaterChart = new Chart(ctxUnderwater, {
-      type: 'line',
-      data: {
-        labels: uwLabels,
-        datasets: [{
-          label: 'Drawdown (%)',
-          data: uwData,
-          borderColor: '#e5484d',
-          backgroundColor: 'rgba(229, 72, 77, 0.15)',
-          fill: true,
-          borderWidth: 1.5,
-          pointRadius: 0,
-          tension: 0.1
-        }]
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: {
-          legend: { display: false },
-          tooltip: {
-            backgroundColor: '#181c22',
-            borderColor: '#1f232d',
-            borderWidth: 1,
-            titleFont: { family: 'JetBrains Mono', size: 11 },
-            bodyFont: { family: 'JetBrains Mono', size: 10 }
-          }
-        },
-        scales: {
-          x: { grid: { color: 'rgba(255, 255, 255, 0.03)' }, ticks: { color: '#57606a', font: { family: 'JetBrains Mono', size: 9 } } },
-          y: { position: 'right', max: 0, grid: { color: 'rgba(255, 255, 255, 0.04)' }, ticks: { color: '#8b949e', font: { family: 'JetBrains Mono', size: 10 }, callback: v => v + '%' } }
-        }
+  // 2. Secondary Line Charts (Guarded for Chart.js CDN availability)
+  try {
+    const ChartClass = (typeof window !== 'undefined' && window.Chart) ? window.Chart : (typeof Chart !== 'undefined' ? Chart : null);
+    if (!ChartClass) {
+      console.warn('Chart.js library is not yet loaded, secondary charts deferred');
+      return;
+    }
+
+    const ctxEquity = document.getElementById('equity-chart');
+    if (ctxEquity) {
+      const eqLabels = Array.from({ length: 30 }, (_, i) => `D${i + 1}`);
+      const eqData = [100000];
+      for (let i = 1; i < 30; i++) {
+        eqData.push(Math.round(eqData[i - 1] * (1 + (Math.random() - 0.44) * 0.008)));
       }
-    });
+      equityChart = new ChartClass(ctxEquity, {
+        type: 'line',
+        data: {
+          labels: eqLabels,
+          datasets: [{
+            label: 'Portfolio Equity ($)',
+            data: eqData,
+            borderColor: '#0fa968',
+            backgroundColor: 'rgba(15, 169, 104, 0.08)',
+            fill: true,
+            borderWidth: 1.8,
+            pointRadius: 0,
+            tension: 0.15
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: { display: false },
+            tooltip: {
+              backgroundColor: '#181c22',
+              borderColor: '#1f232d',
+              borderWidth: 1,
+              titleFont: { family: 'JetBrains Mono', size: 11 },
+              bodyFont: { family: 'JetBrains Mono', size: 10 }
+            }
+          },
+          scales: {
+            x: { grid: { color: 'rgba(255, 255, 255, 0.03)' }, ticks: { color: '#57606a', font: { family: 'JetBrains Mono', size: 9 } } },
+            y: { position: 'right', grid: { color: 'rgba(255, 255, 255, 0.04)' }, ticks: { color: '#8b949e', font: { family: 'JetBrains Mono', size: 10 }, callback: v => '$' + v.toLocaleString() } }
+          }
+        }
+      });
+    }
+
+    // 3. Underwater Drawdown Chart
+    const ctxUnderwater = document.getElementById('underwater-chart');
+    if (ctxUnderwater) {
+      const uwLabels = Array.from({ length: 30 }, (_, i) => `D${i + 1}`);
+      const uwData = Array.from({ length: 30 }, () => -(Math.random() * 2.8).toFixed(2));
+      underwaterChart = new ChartClass(ctxUnderwater, {
+        type: 'line',
+        data: {
+          labels: uwLabels,
+          datasets: [{
+            label: 'Drawdown (%)',
+            data: uwData,
+            borderColor: '#e5484d',
+            backgroundColor: 'rgba(229, 72, 77, 0.15)',
+            fill: true,
+            borderWidth: 1.5,
+            pointRadius: 0,
+            tension: 0.1
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: { display: false },
+            tooltip: {
+              backgroundColor: '#181c22',
+              borderColor: '#1f232d',
+              borderWidth: 1,
+              titleFont: { family: 'JetBrains Mono', size: 11 },
+              bodyFont: { family: 'JetBrains Mono', size: 10 }
+            }
+          },
+          scales: {
+            x: { grid: { color: 'rgba(255, 255, 255, 0.03)' }, ticks: { color: '#57606a', font: { family: 'JetBrains Mono', size: 9 } } },
+            y: { position: 'right', max: 0, grid: { color: 'rgba(255, 255, 255, 0.04)' }, ticks: { color: '#8b949e', font: { family: 'JetBrains Mono', size: 10 }, callback: v => v + '%' } }
+          }
+        }
+      });
+    }
+  } catch (err) {
+    console.error('Failed to initialize Chart.js secondary charts:', err);
   }
 }
 
@@ -2284,6 +2313,16 @@ window.executeQuickTrade = async function(side) {
       msgEl.className = 'text-[#e5484d] truncate max-w-[170px]';
     }
   }
+};
+
+window.quickActionOrder = async function(side) {
+  if (typeof switchSideTab === 'function') switchSideTab('quicktrade');
+  const symEl = document.getElementById('qt-symbol');
+  if (symEl) {
+    symEl.value = state.activeSymbol;
+    if (typeof onQtSymbolChange === 'function') onQtSymbolChange(state.activeSymbol);
+  }
+  return window.executeQuickTrade(side);
 };
 
 window.executeAccountReset = async function() {

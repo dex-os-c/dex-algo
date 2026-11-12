@@ -428,8 +428,8 @@ class MultiAlphaOrchestrator:
 
     def __init__(
         self,
-        entry_threshold: float = 0.20,
-        exit_threshold: float = 0.10,
+        entry_threshold: float = 0.12,
+        exit_threshold: float = 0.08,
         enable_online_sharpe: bool = True
     ):
         self.entry_threshold = entry_threshold

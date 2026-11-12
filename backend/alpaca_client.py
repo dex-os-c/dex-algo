@@ -91,13 +91,16 @@ class MockAlpacaEngine:
         equity = round(self.cash + portfolio_val, 2)
         daily_pnl = round(equity - self.starting_cash, 2)
         daily_pnl_pct = round((daily_pnl / self.starting_cash) * 100.0, 2)
+        available_bp = max(0.0, round((equity * 2.0) - portfolio_val, 2))
+        if available_bp <= 0 and self.cash > 0:
+            available_bp = round(self.cash * 2.0, 2)
 
         return {
             "id": "mock-paper-account-01",
             "account_number": "MOCK-PA-9921",
             "status": "ACTIVE",
             "currency": "USD",
-            "buying_power": str(round(max(0.0, self.cash * 2.0), 2)),
+            "buying_power": str(available_bp),
             "cash": str(round(self.cash, 2)),
             "portfolio_value": str(equity),
             "equity": str(equity),
@@ -164,7 +167,13 @@ class MockAlpacaEngine:
 
         if side == "buy":
             total_cost = fill_price * qty
-            available_buying_power = max(self.cash, self.cash * 2.0)
+            # Compute current portfolio equity & 2x margin buying power
+            portfolio_val = sum(pos["qty"] * self._get_live_price(sym_k) for sym_k, pos in self.positions.items())
+            equity = self.cash + portfolio_val
+            available_buying_power = max(0.0, (equity * 2.0) - portfolio_val)
+            if self.cash > 0:
+                available_buying_power = max(available_buying_power, self.cash * 2.0)
+
             if total_cost > available_buying_power:
                 raise ValueError(f"Insufficient buying power: required ${total_cost:,.2f}, available ${available_buying_power:,.2f}")
             self.cash -= total_cost
@@ -249,15 +258,23 @@ class MockAlpacaEngine:
         bars = []
         now = datetime.datetime.now(datetime.timezone.utc)
         
-        # Synthesize realistic historical OHLCV ending at current_px
-        px = current_px * (1.0 - (0.002 * (limit / 2)))
-        for i in range(limit):
+        # Synthesize realistic historical OHLCV with natural oscillating momentum
+        # ending at current_px, generating healthy RSI and trend waves
+        sym_seed = sum(ord(c) for c in sym)
+        raw_closes = [current_px]
+        for i in range(1, limit):
+            wave = math.sin((i + sym_seed) * 0.35) * (current_px * 0.0035)
+            noise = (random.random() - 0.49) * (current_px * 0.005)
+            prev_p = max(1.0, round(raw_closes[-1] - wave - noise, 2))
+            raw_closes.append(prev_p)
+        raw_closes.reverse()
+
+        for i, c in enumerate(raw_closes):
             bar_time = now - datetime.timedelta(minutes=(limit - i))
-            noise = (random.random() - 0.48) * (current_px * 0.004)
-            o = round(px, 2)
-            c = round(max(1.0, px + noise), 2)
-            h = round(max(o, c) + abs(random.random() * current_px * 0.002), 2)
-            l = round(min(o, c) - abs(random.random() * current_px * 0.002), 2)
+            o = raw_closes[i - 1] if i > 0 else round(c * (1.0 + (random.random() - 0.5) * 0.002), 2)
+            spread = abs(c - o)
+            h = round(max(o, c) + (random.random() * max(spread, current_px * 0.002)), 2)
+            l = round(max(0.5, min(o, c) - (random.random() * max(spread, current_px * 0.002))), 2)
             v = random.randint(5000, 50000)
             bars.append({
                 "t": bar_time.isoformat(),
@@ -267,8 +284,7 @@ class MockAlpacaEngine:
                 "c": c,
                 "v": v
             })
-            px = c
-        # Ensure latest bar close matches current price
+        # Ensure latest bar close exactly matches current live price
         bars[-1]["c"] = current_px
         bars[-1]["h"] = max(bars[-1]["h"], current_px)
         bars[-1]["l"] = min(bars[-1]["l"], current_px)

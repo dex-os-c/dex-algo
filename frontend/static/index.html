@@ -43,7 +43,7 @@
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 
   <!-- Bloomberg Terminal-Inspired Stylesheet -->
-  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/static/style.css?v=3.0.0">
 </head>
 <body class="bg-[#0a0b0d] text-[#e6edf3] font-sans antialiased overflow-hidden selection:bg-[#2563eb] selection:text-white">
 
@@ -296,6 +296,16 @@
                   <span id="chart-high-display" class="text-[10px] font-mono text-[#8b949e]">$68,910.00</span>
                   <span class="text-[10px] text-[#57606a] ml-1">L:</span>
                   <span id="chart-low-display" class="text-[10px] font-mono text-[#8b949e]">$64,820.00</span>
+
+                  <!-- Instant Quick Action Buttons -->
+                  <div class="flex items-center gap-1 ml-2">
+                    <button onclick="quickActionOrder('buy')" class="px-2 py-0.5 text-[10.5px] font-mono font-bold bg-[#0fa968] hover:bg-[#0c8a54] text-white rounded transition shadow-sm flex items-center gap-0.5" title="Instant Buy/Long active asset">
+                      <span>▲</span> BUY
+                    </button>
+                    <button onclick="quickActionOrder('sell')" class="px-2 py-0.5 text-[10.5px] font-mono font-bold bg-[#e5484d] hover:bg-[#c93b40] text-white rounded transition shadow-sm flex items-center gap-0.5" title="Instant Sell/Short active asset">
+                      <span>▼</span> SELL
+                    </button>
+                  </div>
                 </div>
 
                 <div class="panel-actions">
@@ -313,14 +323,14 @@
                   <div class="tab-pill-group mr-2 hidden sm:flex items-center gap-1">
                     <span class="text-[9px] font-mono text-[#57606a] mr-0.5">OVERLAYS:</span>
                     <button id="btn-overlay-kama" class="tab-pill active" onclick="toggleOverlay('kama')">KAMA</button>
-                    <button id="btn-overlay-bbands" class="tab-pill active" onclick="toggleOverlay('bbands')">BBands</button>
+                    <button id="btn-overlay-bbands" class="tab-pill opacity-40" onclick="toggleOverlay('bbands')">BBands</button>
                     <button id="btn-overlay-ratchet" class="tab-pill active" onclick="toggleOverlay('ratchet')">Ratchet</button>
-                    <button id="btn-overlay-vwap" class="tab-pill active" onclick="toggleOverlay('vwap')">VWAP</button>
+                    <button id="btn-overlay-vwap" class="tab-pill opacity-40" onclick="toggleOverlay('vwap')">VWAP</button>
                   </div>
 
                   <!-- Chart Mode tabs -->
                   <div class="tab-pill-group">
-                    <button id="tab-chart-strategy" class="tab-pill active" onclick="switchChartMode('strategy')">Strategy & Bands</button>
+                    <button id="tab-chart-strategy" class="tab-pill active" onclick="switchChartMode('strategy')">🕯️ Candlesticks &amp; Strategy</button>
                     <button id="tab-chart-equity" class="tab-pill" onclick="switchChartMode('equity')">Equity Curve</button>
                     <button id="tab-chart-underwater" class="tab-pill" onclick="switchChartMode('underwater')">Underwater DD</button>
                   </div>
@@ -363,14 +373,14 @@
               <!-- Tab Header -->
               <div class="panel-header">
                 <div class="tab-pill-group">
-                  <button id="tab-btn-orderbook" class="tab-pill active" onclick="switchSideTab('orderbook')">
+                  <button id="tab-btn-quicktrade" class="tab-pill active text-[#0fa968] font-bold" onclick="switchSideTab('quicktrade')">
+                    ⚡ Quick Trade
+                  </button>
+                  <button id="tab-btn-orderbook" class="tab-pill" onclick="switchSideTab('orderbook')">
                     Level-2 Order Book
                   </button>
                   <button id="tab-btn-alphas" class="tab-pill" onclick="switchSideTab('alphas')">
                     Alpha Ensembles
-                  </button>
-                  <button id="tab-btn-quicktrade" class="tab-pill text-[#0fa968] font-bold" onclick="switchSideTab('quicktrade')">
-                    ⚡ Quick Trade
                   </button>
                 </div>
 
@@ -382,7 +392,7 @@
               <div class="panel-body p-2">
 
                 <!-- TAB 1: Level-2 Order Book Depth Ladder -->
-                <div id="side-tab-orderbook" class="flex flex-col h-full justify-between">
+                <div id="side-tab-orderbook" class="hidden flex-col h-full justify-between">
                   <!-- Spread Header -->
                   <div class="flex items-center justify-between px-2 py-1 bg-[#111318] border border-[#1f232d] rounded-sm text-[10.5px] font-mono mb-2">
                     <span class="text-[#8b949e]">Mid Price: <b id="ob-mid-price" class="text-[#e6edf3]">$67,915.67</b></span>
@@ -546,7 +556,7 @@
                 </div>
 
                 <!-- TAB 3: Quick Trade Execution Ticket -->
-                <div id="side-tab-quicktrade" class="hidden flex-col justify-between h-full space-y-2">
+                <div id="side-tab-quicktrade" class="flex flex-col justify-between h-full space-y-2">
                   <!-- Account Balance & Buying Power Card -->
                   <div class="p-2 bg-[#111318] border border-[#1f232d] rounded-sm">
                     <div class="flex justify-between items-center text-[10.5px] font-mono">
@@ -1383,6 +1393,6 @@
   </div>
 
   <!-- Core JavaScript Application -->
-  <script src="/static/app.js"></script>
+  <script src="/static/app.js?v=3.0.0"></script>
 </body>
 </html>
