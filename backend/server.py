@@ -55,6 +55,17 @@ class ConfigUpdateRequest(BaseModel):
     TAKE_PROFIT_MULTIPLIER: Optional[float] = None
 
 
+class OrderRequest(BaseModel):
+    symbol: str
+    side: str  # "buy" or "sell"
+    qty: float
+    order_type: str = "market"  # "market", "limit", "stop"
+    price: Optional[float] = None
+    stop_loss: Optional[float] = None
+    take_profit: Optional[float] = None
+    client_order_id: Optional[str] = None
+
+
 def verify_api_key(
     x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
     authorization: Optional[str] = Header(None)
@@ -113,8 +124,27 @@ def fetch_crypto_quote(symbol: str = "BTC/USD") -> Dict[str, Any]:
             feed = crypto_feed.CryptoMarketFeed.get_instance() if hasattr(crypto_feed.CryptoMarketFeed, "get_instance") else crypto_feed.CryptoMarketFeed()
             if hasattr(feed, "get_crypto_quote"):
                 q = feed.get_crypto_quote(symbol_clean)
-                if q and isinstance(q, dict) and "price" in q:
-                    return q
+                if q and isinstance(q, dict) and ("price" in q or "mid_price" in q or "bid_price" in q):
+                    px = float(q.get("price") or q.get("mid_price") or 0.0)
+                    bid = float(q.get("bid") or q.get("bid_price") or (px - 0.5))
+                    ask = float(q.get("ask") or q.get("ask_price") or (px + 0.5))
+                    return {
+                        "symbol": symbol_clean,
+                        "price": px or round((bid + ask) / 2.0, 2),
+                        "bid": bid,
+                        "ask": ask,
+                        "bid_price": bid,
+                        "ask_price": ask,
+                        "spread": round(ask - bid, 4),
+                        "change_24h": float(q.get("change_24h", -2.5)),
+                        "change_24h_pct": float(q.get("change_24h_pct", -2.5)),
+                        "high_24h": float(q.get("high_24h", px * 1.02)),
+                        "low_24h": float(q.get("low_24h", px * 0.98)),
+                        "volume_24h": float(q.get("volume_24h", 15000.0)),
+                        "is_mock": True,
+                        "data_source": "SIMULATED_MOCK",
+                        "timestamp": q.get("timestamp") or datetime.datetime.now(datetime.timezone.utc).isoformat()
+                    }
     except Exception:
         pass
 
@@ -123,8 +153,27 @@ def fetch_crypto_quote(symbol: str = "BTC/USD") -> Dict[str, Any]:
         client = get_alpaca()
         if hasattr(client, "get_crypto_quote"):
             q = client.get_crypto_quote(symbol_clean)
-            if q and isinstance(q, dict) and "price" in q:
-                return q
+            if q and isinstance(q, dict) and ("price" in q or "mid_price" in q):
+                px = float(q.get("price") or q.get("mid_price") or 0.0)
+                bid = float(q.get("bid") or q.get("bid_price") or (px - 0.5))
+                ask = float(q.get("ask") or q.get("ask_price") or (px + 0.5))
+                return {
+                    "symbol": symbol_clean,
+                    "price": px or round((bid + ask) / 2.0, 2),
+                    "bid": bid,
+                    "ask": ask,
+                    "bid_price": bid,
+                    "ask_price": ask,
+                    "spread": round(ask - bid, 4),
+                    "change_24h": float(q.get("change_24h", 1.2)),
+                    "change_24h_pct": float(q.get("change_24h_pct", 1.2)),
+                    "high_24h": float(q.get("high_24h", px * 1.02)),
+                    "low_24h": float(q.get("low_24h", px * 0.98)),
+                    "volume_24h": float(q.get("volume_24h", 25000.0)),
+                    "is_mock": True,
+                    "data_source": "SIMULATED_MOCK",
+                    "timestamp": q.get("timestamp") or datetime.datetime.now(datetime.timezone.utc).isoformat()
+                }
     except Exception:
         pass
 
@@ -164,9 +213,19 @@ def fetch_crypto_quote(symbol: str = "BTC/USD") -> Dict[str, Any]:
         change_pct = round(-2.51 + (jitter * 0.005), 2)
         volume = 19420.5
 
+    px = round(base_price, 2)
+    half_spread = round(px * 0.0001, 2) or 0.01
+    bid = round(px - half_spread, 2)
+    ask = round(px + half_spread, 2)
+
     return {
         "symbol": symbol_clean,
-        "price": round(base_price, 2),
+        "price": px,
+        "bid": bid,
+        "ask": ask,
+        "bid_price": bid,
+        "ask_price": ask,
+        "spread": round(ask - bid, 4),
         "change_24h": change_pct,
         "change_24h_pct": change_pct,
         "high_24h": high,
@@ -1082,6 +1141,77 @@ def close_position(symbol: str):
         raise HTTPException(status_code=400, detail=str(e))
 
 
+@app.get("/api/orders")
+def get_orders(
+    status: Optional[str] = Query(None, description="Filter by status (e.g. FILLED, SUBMITTED, PENDING, CANCELED)"),
+    symbol: Optional[str] = Query(None, description="Filter by symbol"),
+    limit: int = Query(50, ge=1, le=500)
+):
+    eng = get_engine()
+    orders = eng.get_active_orders()
+    if status:
+        stat_upper = status.upper().strip()
+        orders = [o for o in orders if o.get("status", "").upper() == stat_upper]
+    if symbol:
+        sym_norm = symbol.upper().strip()
+        orders = [o for o in orders if o.get("symbol", "").upper() == sym_norm]
+    return orders[:limit]
+
+
+@app.post("/api/orders")
+def place_order(
+    order: OrderRequest,
+    _authorized: bool = Depends(verify_api_key)
+):
+    eng = get_engine()
+    try:
+        side_clean = order.side.lower().strip()
+        if side_clean not in ("buy", "sell"):
+            raise HTTPException(status_code=400, detail="Order side must be 'buy' or 'sell'")
+        if order.qty <= 0:
+            raise HTTPException(status_code=400, detail="Order qty must be greater than 0")
+
+        res = eng.submit_order(
+            symbol=order.symbol.upper().strip(),
+            side=side_clean,
+            qty=float(order.qty),
+            order_type=order.order_type.lower().strip(),
+            price=float(order.price) if order.price is not None else None,
+            stop_loss_price=float(order.stop_loss) if order.stop_loss is not None else None,
+            take_profit_price=float(order.take_profit) if order.take_profit is not None else None,
+            meta={"client_order_id": order.client_order_id} if order.client_order_id else {}
+        )
+
+        order_dict = res.to_dict() if hasattr(res, "to_dict") else res
+        sync_broadcast({"type": "ORDER_CREATED", "order": order_dict})
+        return {"status": "success", "order": order_dict}
+    except HTTPException:
+        raise
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to place order: {str(e)}")
+
+
+@app.delete("/api/orders/{order_id}")
+def cancel_order(
+    order_id: str,
+    reason: str = Query("MANUAL_CANCEL"),
+    _authorized: bool = Depends(verify_api_key)
+):
+    eng = get_engine()
+    try:
+        res = eng.cancel_order(order_id, reason=reason)
+        sync_broadcast({"type": "ORDER_CANCELED", "order_id": order_id, "order": res})
+        return {"status": "success", "order": res}
+    except HTTPException:
+        raise
+    except ValueError as ve:
+        raise HTTPException(status_code=404, detail=str(ve))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to cancel order: {str(e)}")
+
+
 @app.get("/api/trades")
 def get_trades(limit: int = Query(50, ge=1, le=500), status: Optional[str] = None):
     return database.get_trades(limit=limit, status=status)
@@ -1442,6 +1572,29 @@ async def websocket_endpoint(websocket: WebSocket):
                     elif action == "get_underwater":
                         uw = _generate_underwater_drawdown_series()
                         await websocket.send_text(database.safe_json_dumps({"type": "UNDERWATER_DRAWDOWN", "data": uw}))
+                    elif action == "get_orders":
+                        eng = get_engine()
+                        ords = eng.get_active_orders()
+                        await websocket.send_text(database.safe_json_dumps({"type": "ORDERS", "data": ords}))
+                    elif action == "create_order":
+                        eng = get_engine()
+                        res = eng.submit_order(
+                            symbol=payload.get("symbol", "BTC/USD"),
+                            side=payload.get("side", "buy"),
+                            qty=float(payload.get("qty", 1.0)),
+                            order_type=payload.get("order_type", "market"),
+                            price=float(payload.get("price")) if payload.get("price") is not None else None,
+                            stop_loss_price=float(payload.get("stop_loss")) if payload.get("stop_loss") is not None else None,
+                            take_profit_price=float(payload.get("take_profit")) if payload.get("take_profit") is not None else None,
+                        )
+                        order_dict = res.to_dict() if hasattr(res, "to_dict") else res
+                        await websocket.send_text(database.safe_json_dumps({"type": "ORDER_CREATED", "data": order_dict}))
+                    elif action == "cancel_order":
+                        eng = get_engine()
+                        oid = payload.get("order_id")
+                        if oid:
+                            res = eng.cancel_order(oid, reason=payload.get("reason", "WS_CANCEL"))
+                            await websocket.send_text(database.safe_json_dumps({"type": "ORDER_CANCELED", "data": res}))
                 except Exception:
                     pass
         except Exception:
@@ -1451,7 +1604,9 @@ async def websocket_endpoint(websocket: WebSocket):
 
     try:
         # Send initial state snapshot on connect with both equity, crypto quant, heatmap, and WFO data
-        if engine and alpaca:
+        eng = get_engine()
+        alp = get_alpaca()
+        if eng and alp:
             c_state = fetch_crypto_state("BTC/USD")
             c_regime = fetch_crypto_regime("BTC/USD")
             c_alphas = fetch_crypto_alphas("BTC/USD")
@@ -1464,9 +1619,10 @@ async def websocket_endpoint(websocket: WebSocket):
             init_payload = {
                 "type": "INIT_SNAPSHOT",
                 "event": "SNAPSHOT",
-                "status": engine.get_status(),
-                "account": alpaca.get_account(),
-                "positions": alpaca.get_positions(),
+                "status": eng.get_status(),
+                "account": alp.get_account(),
+                "positions": alp.get_positions(),
+                "orders": eng.get_active_orders(),
                 "position_heatmap": c_heatmap,
                 "metrics": database.get_performance_metrics(),
                 "crypto_metrics": c_metrics,
@@ -1489,7 +1645,9 @@ async def websocket_endpoint(websocket: WebSocket):
             # Stream real-time tick updates, regime transitions, order book snapshots,
             # position heatmap, and alpha weights every 1.5 seconds to connected dashboard clients
             await asyncio.sleep(1.5)
-            if engine and alpaca:
+            eng = get_engine()
+            alp = get_alpaca()
+            if eng and alp:
                 c_state = fetch_crypto_state("BTC/USD")
                 c_regime = fetch_crypto_regime("BTC/USD")
                 c_alphas = fetch_crypto_alphas("BTC/USD")
@@ -1523,9 +1681,10 @@ async def websocket_endpoint(websocket: WebSocket):
                     "crypto_metrics": c_metrics,
                     "wfo_metrics": c_wfo,
                     "underwater_drawdown": c_wfo.get("underwater_drawdown", []),
-                    "status": engine.get_status(),
-                    "account": alpaca.get_account(),
-                    "positions": alpaca.get_positions(),
+                    "status": eng.get_status(),
+                    "account": alp.get_account(),
+                    "positions": alp.get_positions(),
+                    "orders": eng.get_active_orders(),
                     "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat()
                 }
                 await websocket.send_text(database.safe_json_dumps(tick_payload))

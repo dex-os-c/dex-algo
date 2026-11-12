@@ -309,6 +309,7 @@ function handleWsMessage(msg) {
     if (msg.alphas) updateAlphas(msg.alphas);
     if (msg.orderbook) updateOrderBook(msg.orderbook);
     if (msg.positions) updatePositions(msg.positions);
+    if (msg.orders) updateOrders(msg.orders);
     if (msg.wfo_metrics) updateWfo(msg.wfo_metrics);
     if (msg.logs) updateLogs(msg.logs);
     return;
@@ -323,6 +324,7 @@ function handleWsMessage(msg) {
     if (msg.orderbook) updateOrderBook(msg.orderbook);
     if (msg.account) updateAccount(msg.account);
     if (msg.positions) updatePositions(msg.positions);
+    if (msg.orders) updateOrders(msg.orders);
     return;
   }
 
@@ -334,6 +336,10 @@ function handleWsMessage(msg) {
     updateOrderBook(msg.data || msg);
   } else if (type === 'WFO_METRICS') {
     updateWfo(msg.data || msg);
+  } else if (type === 'ORDERS') {
+    updateOrders(msg.data || msg.orders || msg);
+  } else if (type === 'ORDER_CREATED' || type === 'ORDER_CANCELED') {
+    refreshOrdersBlotter();
   }
 }
 
@@ -355,7 +361,7 @@ async function fetchApi(endpoint, options = {}) {
 }
 
 async function refreshAllData(silent = false) {
-  const [status, cryptoState, regime, alphas, ob, account, positions, wfo, decisions] = await Promise.all([
+  const [status, cryptoState, regime, alphas, ob, account, positions, orders, wfo, decisions] = await Promise.all([
     fetchApi('/api/status'),
     fetchApi(`/api/crypto/state?symbol=${encodeURIComponent(state.activeSymbol)}`),
     fetchApi(`/api/crypto/regime?symbol=${encodeURIComponent(state.activeSymbol)}`),
@@ -363,6 +369,7 @@ async function refreshAllData(silent = false) {
     fetchApi(`/api/crypto/orderbook?symbol=${encodeURIComponent(state.activeSymbol)}`),
     fetchApi('/api/account'),
     fetchApi('/api/positions'),
+    fetchApi('/api/orders'),
     fetchApi(`/api/backtest/wfo?symbol=${encodeURIComponent(state.activeSymbol.replace('/', ''))}`),
     fetchApi('/api/decisions?limit=15')
   ]);
@@ -374,6 +381,7 @@ async function refreshAllData(silent = false) {
   if (ob) updateOrderBook(ob);
   if (account) updateAccount(account);
   if (positions) updatePositions(positions);
+  if (orders) updateOrders(orders);
   if (wfo) updateWfo(wfo);
   if (decisions) updateDecisions(decisions);
 }
@@ -738,6 +746,303 @@ function updatePositions(positions) {
   tbody.innerHTML = rows;
 }
 
+function updateOrders(ordersList) {
+  state.orders = Array.isArray(ordersList) ? ordersList : [];
+
+  // Update counter badges
+  const activeOrders = state.orders.filter(o => 
+    o.status === 'SUBMITTED' || o.status === 'PENDING' || o.status === 'PARTIALLY_FILLED'
+  );
+  const countBadge = document.getElementById('count-orders');
+  const blotterBadge = document.getElementById('blotter-count-badge');
+  if (countBadge) countBadge.textContent = activeOrders.length;
+  if (blotterBadge) blotterBadge.textContent = `${activeOrders.length} Active`;
+
+  renderTerminalOrders(state.orders);
+  renderOrdersBlotter(state.orders);
+  renderExecutionsBlotter(state.orders);
+}
+
+function renderTerminalOrders(orders) {
+  const tbody = document.getElementById('orders-table-body');
+  const empty = document.getElementById('orders-empty-state');
+  if (!tbody) return;
+
+  if (orders.length === 0) {
+    tbody.innerHTML = '';
+    if (empty) empty.classList.remove('hidden');
+    return;
+  }
+  if (empty) empty.classList.add('hidden');
+
+  tbody.innerHTML = orders.map(o => {
+    const isBuy = (o.side || 'buy').toLowerCase() === 'buy';
+    const sideClass = isBuy ? 'text-[#0fa968]' : 'text-[#e5484d]';
+    const statusClass = getStatusPillClass(o.status);
+    const pxDisplay = o.price ? fmtCurrency(o.price) : (o.avg_fill_price ? fmtCurrency(o.avg_fill_price) : 'MKT');
+    const timeDisplay = o.created_at ? new Date(o.created_at).toLocaleTimeString() : '--:--:--';
+
+    return `
+      <tr>
+        <td class="font-mono text-white text-[10.5px]">${escapeHtml(o.order_id || '')}</td>
+        <td class="font-bold text-white">${escapeHtml(o.symbol || '')}</td>
+        <td class="uppercase text-[#8b949e]">${escapeHtml(o.order_type || 'MKT')}</td>
+        <td class="font-bold ${sideClass}">${(o.side || 'BUY').toUpperCase()}</td>
+        <td class="tabular-nums font-mono">${fmtNumber(o.qty, 4)}</td>
+        <td class="tabular-nums font-mono">${pxDisplay}</td>
+        <td><span class="status-pill ${statusClass}">${escapeHtml(o.status || 'SUBMITTED')}</span></td>
+        <td class="text-[#8b949e] text-[10px]">${timeDisplay}</td>
+      </tr>
+    `;
+  }).join('');
+}
+
+function renderOrdersBlotter(orders) {
+  const tbody = document.getElementById('orders-blotter-tbody');
+  const empty = document.getElementById('blotter-empty-state');
+  if (!tbody) return;
+
+  if (orders.length === 0) {
+    tbody.innerHTML = '';
+    if (empty) empty.classList.remove('hidden');
+    return;
+  }
+  if (empty) empty.classList.add('hidden');
+
+  tbody.innerHTML = orders.map(o => {
+    const isBuy = (o.side || 'buy').toLowerCase() === 'buy';
+    const sideClass = isBuy ? 'text-[#0fa968]' : 'text-[#e5484d]';
+    const statusClass = getStatusPillClass(o.status);
+    const canCancel = (o.status === 'SUBMITTED' || o.status === 'PENDING' || o.status === 'PARTIALLY_FILLED');
+    const pxDisplay = o.price ? fmtCurrency(o.price) : (o.avg_fill_price ? fmtCurrency(o.avg_fill_price) : 'MKT');
+    const stopTpDisplay = (o.stop_loss_price || o.take_profit_price) 
+      ? `SL: ${o.stop_loss_price ? fmtCurrency(o.stop_loss_price) : '--'} / TP: ${o.take_profit_price ? fmtCurrency(o.take_profit_price) : '--'}`
+      : '--';
+    const timeDisplay = o.created_at ? new Date(o.created_at).toLocaleTimeString() : '--:--:--';
+
+    const actionHtml = canCancel 
+      ? `<button class="btn-terminal danger py-0.5 px-1.5 text-[9px]" onclick="cancelOrder('${escapeHtml(o.order_id)}')">Cancel</button>`
+      : `<span class="text-[#57606a] text-[9.5px]">Settled</span>`;
+
+    return `
+      <tr>
+        <td class="font-mono text-white text-[10.5px]">${escapeHtml(o.order_id || '')}</td>
+        <td class="text-[#8b949e] text-[10px]">${timeDisplay}</td>
+        <td class="font-bold text-white">${escapeHtml(o.symbol || '')}</td>
+        <td class="font-bold ${sideClass}">${(o.side || 'BUY').toUpperCase()}</td>
+        <td class="uppercase text-[#8b949e]">${escapeHtml(o.order_type || 'MKT')}</td>
+        <td class="tabular-nums font-mono">${fmtNumber(o.qty, 4)}</td>
+        <td class="tabular-nums font-mono">${fmtNumber(o.filled_qty || 0, 4)}</td>
+        <td class="tabular-nums font-mono">${pxDisplay}</td>
+        <td class="tabular-nums font-mono text-[9.5px] text-[#8b949e]">${stopTpDisplay}</td>
+        <td><span class="status-pill ${statusClass}">${escapeHtml(o.status || 'SUBMITTED')}</span></td>
+        <td>${actionHtml}</td>
+      </tr>
+    `;
+  }).join('');
+}
+
+function renderExecutionsBlotter(orders) {
+  const tbody = document.getElementById('executions-blotter-tbody');
+  if (!tbody) return;
+
+  const filledOrders = orders.filter(o => o.status === 'FILLED' || (o.filled_qty && o.filled_qty > 0));
+  if (filledOrders.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="10" class="text-center py-4 text-[#57606a] font-mono text-xs">No execution fills recorded yet</td></tr>`;
+    return;
+  }
+
+  tbody.innerHTML = filledOrders.map(o => {
+    const isBuy = (o.side || 'buy').toLowerCase() === 'buy';
+    const sideClass = isBuy ? 'text-[#0fa968]' : 'text-[#e5484d]';
+    const fillPx = o.avg_fill_price || o.price || 0;
+    const filledQty = o.filled_qty || o.qty || 0;
+    const notional = fillPx * filledQty;
+    const fee = notional * 0.0006;
+    const timeDisplay = o.updated_at ? new Date(o.updated_at).toLocaleTimeString() : '--:--:--';
+
+    return `
+      <tr>
+        <td class="text-[#8b949e] text-[10px]">${timeDisplay}</td>
+        <td class="font-mono text-white text-[10.5px]">${escapeHtml(o.order_id || '')}</td>
+        <td class="font-bold text-white">${escapeHtml(o.symbol || '')}</td>
+        <td class="font-bold ${sideClass}">${(o.side || 'BUY').toUpperCase()}</td>
+        <td class="tabular-nums font-mono">${fmtCurrency(fillPx)}</td>
+        <td class="tabular-nums font-mono">${fmtNumber(filledQty, 4)}</td>
+        <td class="tabular-nums font-mono">${fmtCurrency(notional)}</td>
+        <td class="tabular-nums font-mono text-[#8b949e]">${fmtCurrency(fee)}</td>
+        <td class="tabular-nums font-mono text-[#0fa968]">0.8 bps</td>
+        <td class="tabular-nums font-mono text-[#0fa968]">--</td>
+      </tr>
+    `;
+  }).join('');
+}
+
+function getStatusPillClass(status) {
+  const s = (status || '').toUpperCase();
+  if (s === 'FILLED') return 'bull';
+  if (s === 'SUBMITTED' || s === 'OPEN') return 'info';
+  if (s === 'PARTIALLY_FILLED' || s === 'PENDING') return 'compression';
+  if (s === 'CANCELED' || s === 'EXPIRED') return 'neutral';
+  if (s === 'REJECTED') return 'bear';
+  return 'neutral';
+}
+
+// Order Ticket State & Handlers
+let ticketSide = 'buy';
+
+window.setTicketSide = function(side) {
+  ticketSide = side.toLowerCase();
+  const btnBuy = document.getElementById('ticket-side-buy');
+  const btnSell = document.getElementById('ticket-side-sell');
+  const btnSubmit = document.getElementById('btn-submit-ticket');
+
+  if (ticketSide === 'buy') {
+    if (btnBuy) {
+      btnBuy.className = 'py-1.5 rounded font-mono font-bold text-xs bg-[#0fa968] text-white border border-[#0fa968]';
+    }
+    if (btnSell) {
+      btnSell.className = 'py-1.5 rounded font-mono font-bold text-xs bg-[#111318] text-[#8b949e] border border-[#1f232d]';
+    }
+    if (btnSubmit) {
+      btnSubmit.className = 'w-full py-2 rounded font-mono font-bold text-xs bg-[#0fa968] text-white hover:bg-[#0d9259] transition flex items-center justify-center gap-2';
+    }
+  } else {
+    if (btnBuy) {
+      btnBuy.className = 'py-1.5 rounded font-mono font-bold text-xs bg-[#111318] text-[#8b949e] border border-[#1f232d]';
+    }
+    if (btnSell) {
+      btnSell.className = 'py-1.5 rounded font-mono font-bold text-xs bg-[#e5484d] text-white border border-[#e5484d]';
+    }
+    if (btnSubmit) {
+      btnSubmit.className = 'w-full py-2 rounded font-mono font-bold text-xs bg-[#e5484d] text-white hover:bg-[#c93b40] transition flex items-center justify-center gap-2';
+    }
+  }
+};
+
+window.onTicketTypeChange = function(type) {
+  const priceCont = document.getElementById('ticket-price-container');
+  const bracketCont = document.getElementById('ticket-bracket-container');
+
+  if (type === 'limit' || type === 'stop') {
+    if (priceCont) priceCont.classList.remove('hidden');
+    if (bracketCont) bracketCont.classList.add('hidden');
+  } else if (type === 'bracket') {
+    if (priceCont) priceCont.classList.remove('hidden');
+    if (bracketCont) bracketCont.classList.remove('hidden');
+  } else {
+    if (priceCont) priceCont.classList.add('hidden');
+    if (bracketCont) bracketCont.classList.add('hidden');
+  }
+  updateTicketPreview();
+};
+
+window.onTicketSymbolChange = function(sym) {
+  updateTicketPreview();
+};
+
+window.updateTicketPreview = function() {
+  const symEl = document.getElementById('ticket-symbol');
+  const qtyEl = document.getElementById('ticket-qty');
+  const priceEl = document.getElementById('ticket-price');
+  const estPxEl = document.getElementById('ticket-est-price');
+  const estNotionalEl = document.getElementById('ticket-est-notional');
+  const estFeeEl = document.getElementById('ticket-est-fee');
+
+  const sym = symEl ? symEl.value : 'BTC/USD';
+  const qty = parseFloat(qtyEl ? qtyEl.value : 0.5) || 0.5;
+
+  let midPrice = state.quote.price || 67940;
+  if (sym.includes('ETH')) midPrice = 3450;
+  else if (sym.includes('SOL')) midPrice = 184.6;
+  else if (sym.includes('SPY')) midPrice = 582.4;
+  else if (sym.includes('QQQ')) midPrice = 496.8;
+
+  const userPrice = parseFloat(priceEl ? priceEl.value : null);
+  const effectivePrice = (!isNaN(userPrice) && userPrice > 0) ? userPrice : midPrice;
+  const notional = qty * effectivePrice;
+  const fee = notional * 0.0006; // 6 bps taker fee
+
+  if (estPxEl) estPxEl.textContent = fmtCurrency(effectivePrice);
+  if (estNotionalEl) estNotionalEl.textContent = fmtCurrency(notional);
+  if (estFeeEl) estFeeEl.textContent = fmtCurrency(fee);
+};
+
+window.submitOrderTicket = async function() {
+  const symEl = document.getElementById('ticket-symbol');
+  const typeEl = document.getElementById('ticket-type');
+  const qtyEl = document.getElementById('ticket-qty');
+  const priceEl = document.getElementById('ticket-price');
+  const slEl = document.getElementById('ticket-stop-loss');
+  const tpEl = document.getElementById('ticket-take-profit');
+  const btn = document.getElementById('btn-submit-ticket');
+
+  const symbol = symEl ? symEl.value : 'BTC/USD';
+  const orderType = typeEl ? typeEl.value : 'market';
+  const qty = parseFloat(qtyEl ? qtyEl.value : 0);
+  const price = priceEl && priceEl.value ? parseFloat(priceEl.value) : null;
+  const stopLoss = slEl && slEl.value ? parseFloat(slEl.value) : null;
+  const takeProfit = tpEl && tpEl.value ? parseFloat(tpEl.value) : null;
+
+  if (isNaN(qty) || qty <= 0) {
+    showToast('Invalid order quantity: must be > 0', 'error');
+    return;
+  }
+
+  if (btn) btn.disabled = true;
+
+  try {
+    const payload = {
+      symbol: symbol,
+      side: ticketSide,
+      qty: qty,
+      order_type: orderType,
+      price: price,
+      stop_loss: stopLoss,
+      take_profit: takeProfit
+    };
+
+    const res = await fetchApi('/api/orders', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    });
+
+    if (res && res.status === 'success') {
+      showToast(`Order Placed: ${ticketSide.toUpperCase()} ${qty} ${symbol} (${orderType.toUpperCase()})`, 'success');
+      refreshOrdersBlotter();
+    } else {
+      showToast(`Order Failed: ${res ? res.detail || 'Server error' : 'Network error'}`, 'error');
+    }
+  } catch (err) {
+    showToast(`Order submission error: ${err.message}`, 'error');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+};
+
+window.cancelOrder = async function(orderId) {
+  try {
+    const res = await fetchApi(`/api/orders/${encodeURIComponent(orderId)}`, {
+      method: 'DELETE'
+    });
+    if (res && res.status === 'success') {
+      showToast(`Order ${orderId} Canceled`, 'info');
+      refreshOrdersBlotter();
+    } else {
+      showToast(`Cancel Failed: ${res ? res.detail || 'Server error' : 'Order not found'}`, 'error');
+    }
+  } catch (err) {
+    showToast(`Cancel error: ${err.message}`, 'error');
+  }
+};
+
+window.refreshOrdersBlotter = async function() {
+  const orders = await fetchApi('/api/orders');
+  if (orders) {
+    updateOrders(orders);
+  }
+};
+
 function updateLogs(logs) {
   if (!Array.isArray(logs)) return;
   state.logs = logs;
@@ -935,6 +1240,14 @@ function initCharts() {
             borderWidth: 1.5,
             pointRadius: 0,
             stepped: true
+          },
+          {
+            label: 'Anchored VWAP',
+            data: prices.map((p, i) => p - 120 + (i * 5)),
+            borderColor: '#a855f7',
+            borderWidth: 1.2,
+            borderDash: [2, 2],
+            pointRadius: 0
           }
         ]
       },
@@ -971,6 +1284,40 @@ function initCharts() {
     });
   }
 }
+
+window.toggleOverlay = function(name) {
+  if (!strategyChart) return;
+  const btn = document.getElementById(`btn-overlay-${name}`);
+  const isActive = btn ? btn.classList.contains('active') : true;
+
+  if (name === 'kama') {
+    const meta = strategyChart.getDatasetMeta(1);
+    meta.hidden = isActive;
+  } else if (name === 'bbands') {
+    const metaUpper = strategyChart.getDatasetMeta(2);
+    const metaLower = strategyChart.getDatasetMeta(3);
+    metaUpper.hidden = isActive;
+    metaLower.hidden = isActive;
+  } else if (name === 'ratchet') {
+    const meta = strategyChart.getDatasetMeta(4);
+    meta.hidden = isActive;
+  } else if (name === 'vwap') {
+    const meta = strategyChart.getDatasetMeta(5);
+    meta.hidden = isActive;
+  }
+
+  if (btn) {
+    if (isActive) {
+      btn.classList.remove('active');
+      btn.classList.add('opacity-40');
+    } else {
+      btn.classList.add('active');
+      btn.classList.remove('opacity-40');
+    }
+  }
+
+  strategyChart.update();
+};
 
 function generateMockCandles(count, basePrice) {
   const candles = [];

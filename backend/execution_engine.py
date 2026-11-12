@@ -694,14 +694,23 @@ class ManagedOrder:
     take_profit_price: Optional[float] = None
     parent_order_id: Optional[str] = None
     child_order_ids: List[str] = field(default_factory=list)
+    child_orders: List[str] = field(default_factory=list)
     created_at: str = field(default_factory=lambda: datetime.datetime.now(datetime.timezone.utc).isoformat())
     updated_at: str = field(default_factory=lambda: datetime.datetime.now(datetime.timezone.utc).isoformat())
     meta: Dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self):
+        if not self.child_orders and self.child_order_ids:
+            self.child_orders = list(self.child_order_ids)
+        elif not self.child_order_ids and self.child_orders:
+            self.child_order_ids = list(self.child_orders)
 
     def to_dict(self) -> Dict[str, Any]:
         d = asdict(self)
         d["status"] = self.status.value if hasattr(self.status, "value") else str(self.status)
         d["order_class"] = self.order_class.value if hasattr(self.order_class, "value") else str(self.order_class)
+        d["child_orders"] = self.child_orders or self.child_order_ids
+        d["child_order_ids"] = self.child_order_ids or self.child_orders
         return d
 
 
@@ -1227,6 +1236,110 @@ class ExecutionEngine:
                 if child_id in self.orders:
                     self.orders[child_id].qty = new_filled
                     self.orders[child_id].updated_at = order.updated_at
+
+    def submit_order(
+        self,
+        symbol: str,
+        side: str,
+        qty: float,
+        order_type: str = "market",
+        price: Optional[float] = None,
+        stop_loss_price: Optional[float] = None,
+        take_profit_price: Optional[float] = None,
+        meta: Optional[Dict[str, Any]] = None
+    ) -> ManagedOrder:
+        """
+        Submits a manual or automated order into the execution engine.
+        Supports market, limit, stop, and bracket orders.
+        """
+        side_lower = side.lower().strip()
+        if side_lower not in ("buy", "sell"):
+            raise ValueError(f"Invalid order side: {side}. Must be 'buy' or 'sell'.")
+        if qty <= 0:
+            raise ValueError(f"Invalid order quantity: {qty}. Must be > 0.")
+
+        # If bracket stops are specified, route to submit_bracket_order
+        if (stop_loss_price is not None and stop_loss_price > 0) or (take_profit_price is not None and take_profit_price > 0):
+            sl = stop_loss_price if (stop_loss_price and stop_loss_price > 0) else (price * 0.95 if price else 0.0)
+            return self.submit_bracket_order(
+                symbol=symbol,
+                side=side_lower,
+                qty=qty,
+                stop_loss_price=sl,
+                take_profit_price=take_profit_price,
+                order_type=order_type,
+                meta=meta
+            )
+
+        with self._lock:
+            client_id = f"ord-{normalize_symbol(symbol).replace('/', '')}-{int(time.time() * 1000)}"
+            now_ts = datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+            raw_order = self.alpaca.create_order(
+                symbol=symbol,
+                qty=qty,
+                side=side_lower,
+                order_type=order_type
+            )
+            order_id = str(raw_order.get("id", client_id))
+            fill_px = float(raw_order.get("filled_avg_price", raw_order.get("price", price or 0.0)))
+            filled_qty = float(raw_order.get("filled_qty", qty if raw_order.get("status") == "filled" else 0.0))
+
+            managed = ManagedOrder(
+                order_id=order_id,
+                client_order_id=client_id,
+                symbol=symbol,
+                side=side_lower,
+                order_type=order_type,
+                order_class=OrderClass.SIMPLE,
+                qty=qty,
+                filled_qty=filled_qty,
+                remaining_qty=max(0.0, qty - filled_qty),
+                price=price or fill_px,
+                avg_fill_price=fill_px,
+                status=OrderState.FILLED if filled_qty >= qty else OrderState.SUBMITTED,
+                created_at=now_ts,
+                updated_at=now_ts,
+                meta=meta or {}
+            )
+            self.orders[order_id] = managed
+            database.add_log("INFO", f"Order submitted: {side_lower.upper()} {qty} {symbol} ({order_type.upper()}) -> ID {order_id}")
+            return managed
+
+    def cancel_order(self, order_id: str, reason: str = "MANUAL_CANCEL") -> Dict[str, Any]:
+        """Cancels an order and any linked child OCO legs."""
+        with self._lock:
+            if order_id not in self.orders:
+                raise ValueError(f"Order {order_id} not found in execution engine")
+            order = self.orders[order_id]
+            if order.status in (OrderState.FILLED, OrderState.CANCELED, OrderState.EXPIRED, OrderState.REJECTED):
+                return {"order_id": order_id, "status": order.status.value if hasattr(order.status, "value") else str(order.status), "detail": "Order is already closed/settled"}
+
+            now_ts = datetime.datetime.now(datetime.timezone.utc).isoformat()
+            order.status = OrderState.CANCELED
+            order.updated_at = now_ts
+            order.meta["canceled_reason"] = reason
+
+            # Cancel linked child legs
+            for child_id in (order.child_orders or order.child_order_ids):
+                if child_id in self.orders:
+                    c = self.orders[child_id]
+                    if c.status in (OrderState.PENDING, OrderState.SUBMITTED, OrderState.PARTIALLY_FILLED):
+                        c.status = OrderState.CANCELED
+                        c.updated_at = now_ts
+                        c.meta["canceled_reason"] = f"Parent {order_id} canceled"
+
+            # Cancel opposing OCO leg if present
+            opp_id = self.oco_pairs.get(order_id)
+            if opp_id and opp_id in self.orders:
+                opp = self.orders[opp_id]
+                if opp.status in (OrderState.PENDING, OrderState.SUBMITTED, OrderState.PARTIALLY_FILLED):
+                    opp.status = OrderState.CANCELED
+                    opp.updated_at = now_ts
+                    opp.meta["canceled_reason"] = f"Opposing leg {order_id} canceled"
+
+            database.add_log("INFO", f"Order {order_id} ({order.symbol} {order.side}) canceled: {reason}")
+            return order.to_dict()
 
     def get_active_orders(self) -> List[Dict[str, Any]]:
         with self._lock:

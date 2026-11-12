@@ -523,6 +523,11 @@ html, body {
   color: var(--text-secondary);
   border-color: var(--border-default);
 }
+.status-pill.info {
+  background: rgba(56, 189, 248, 0.1);
+  color: #38bdf8;
+  border-color: rgba(56, 189, 248, 0.25);
+}
 
 /* Discrete Dot Indicators */
 .dot {
