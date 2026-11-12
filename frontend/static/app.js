@@ -1203,12 +1203,12 @@ function renderWfoSummaryTable(summary) {
 
 class CandlestickChartEngine {
   constructor(canvasId) {
+    this.canvasId = canvasId;
     this.canvas = document.getElementById(canvasId);
     if (!this.canvas) return;
     this.ctx = this.canvas.getContext('2d');
-    this.bars = [];
-    this.symbol = 'BTC/USD';
-    this.timeframe = '1h';
+    this.symbol = (window.state && window.state.activeSymbol) || 'BTC/USD';
+    this.timeframe = (window.state && window.state.activeChartTf) || '1h';
     this.overlays = {
       kama: true,
       bbands: true,
@@ -1220,8 +1220,21 @@ class CandlestickChartEngine {
     this.hoverY = null;
     this.isHovering = false;
 
+    // Immediately seed with fallback bars so canvas is drawn on first frame
+    const seedPrice = (window.state && window.state.quote && window.state.quote.price) || 67900;
+    this.bars = this.generateFallbackBars(60, seedPrice);
+
     this.setupEvents();
     this.setupResize();
+
+    // Render immediately, and schedule follow-ups for post-layout settling
+    this.render();
+    if (window.requestAnimationFrame) window.requestAnimationFrame(() => this.render());
+    setTimeout(() => this.render(), 60);
+    setTimeout(() => this.render(), 200);
+    setTimeout(() => this.render(), 600);
+
+    // Fetch live market bars from backend
     this.loadBars(this.symbol, this.timeframe);
   }
 
@@ -1231,8 +1244,10 @@ class CandlestickChartEngine {
         this.render();
       });
       this.resizeObserver.observe(this.canvas.parentElement);
+      this.resizeObserver.observe(this.canvas);
     }
     window.addEventListener('resize', () => this.render());
+    window.addEventListener('load', () => this.render());
   }
 
   setupEvents() {
@@ -1259,8 +1274,8 @@ class CandlestickChartEngine {
       return;
     }
     const rect = this.canvas.getBoundingClientRect();
-    const rightMargin = 68;
-    const chartWidth = Math.max(10, rect.width - rightMargin);
+    const rightMargin = 72;
+    const chartWidth = Math.max(10, (rect.width || 600) - rightMargin);
     const count = this.bars.length;
     const barStep = chartWidth / count;
     const idx = Math.floor(this.hoverX / barStep);
@@ -1279,52 +1294,75 @@ class CandlestickChartEngine {
     const elV = document.getElementById('hud-volume');
     const elChg = document.getElementById('hud-change');
 
-    const fmt = (v) => v >= 1000 ? '$' + v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '$' + v.toFixed(2);
+    const fmt = (v) => {
+      const num = parseFloat(v) || 0;
+      return num >= 1000 ? '$' + num.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '$' + num.toFixed(2);
+    };
+
     if (elO) elO.textContent = fmt(b.open);
     if (elH) elH.textContent = fmt(b.high);
     if (elL) elL.textContent = fmt(b.low);
     if (elC) elC.textContent = fmt(b.close);
-    if (elV) elV.textContent = b.volume >= 1000 ? b.volume.toFixed(1) : b.volume.toFixed(4);
+    if (elV) {
+      const volNum = parseFloat(b.volume) || 0;
+      elV.textContent = volNum >= 1000 ? volNum.toFixed(1) : volNum.toFixed(4);
+    }
 
     if (elChg) {
-      const chg = b.open > 0 ? ((b.close - b.open) / b.open) * 100 : 0;
+      const openPx = parseFloat(b.open) || 0;
+      const closePx = parseFloat(b.close) || 0;
+      const chg = openPx > 0 ? ((closePx - openPx) / openPx) * 100 : 0;
       elChg.textContent = `${chg >= 0 ? '+' : ''}${chg.toFixed(2)}%`;
       elChg.className = chg >= 0 ? 'text-[#0fa968]' : 'text-[#e5484d]';
     }
   }
 
   async loadBars(symbol, timeframe = '1h') {
-    this.symbol = symbol;
-    this.timeframe = timeframe;
+    this.symbol = symbol || this.symbol;
+    this.timeframe = timeframe || this.timeframe;
     try {
-      const res = await fetchApi(`/api/market/bars?symbol=${encodeURIComponent(symbol)}&timeframe=${encodeURIComponent(timeframe)}&limit=60`);
-      if (res && res.bars && res.bars.length > 0) {
-        this.bars = res.bars;
+      const res = await fetchApi(`/api/market/bars?symbol=${encodeURIComponent(this.symbol)}&timeframe=${encodeURIComponent(this.timeframe)}&limit=60`);
+      if (res && res.bars && Array.isArray(res.bars) && res.bars.length > 0) {
+        this.bars = res.bars.map(b => ({
+          time: String(b.time || ''),
+          open: parseFloat(b.open) || 0,
+          high: parseFloat(b.high) || parseFloat(b.open) || 0,
+          low: parseFloat(b.low) || parseFloat(b.open) || 0,
+          close: parseFloat(b.close) || parseFloat(b.open) || 0,
+          volume: parseFloat(b.volume) || 0,
+          vwap: parseFloat(b.vwap) || parseFloat(b.close) || 0
+        }));
       } else {
-        this.bars = this.generateFallbackBars(60, state.quote.price || 67900);
+        const basePx = (window.state && window.state.quote && window.state.quote.price) || 67900;
+        this.bars = this.generateFallbackBars(60, basePx);
       }
     } catch (e) {
-      this.bars = this.generateFallbackBars(60, state.quote.price || 67900);
+      const basePx = (window.state && window.state.quote && window.state.quote.price) || 67900;
+      this.bars = this.generateFallbackBars(60, basePx);
     }
     this.updateHud(null);
     this.render();
+    if (window.requestAnimationFrame) window.requestAnimationFrame(() => this.render());
+    setTimeout(() => this.render(), 80);
   }
 
   generateFallbackBars(count, basePrice) {
     const bars = [];
-    let p = basePrice * 0.96;
+    const validBase = (typeof basePrice === 'number' && basePrice > 0) ? basePrice : 67900;
+    let p = validBase * 0.96;
     const now = Date.now();
     const stepMs = 3600000;
     for (let i = 0; i < count; i++) {
       const t = new Date(now - (count - i) * stepMs);
-      const noise = (Math.random() - 0.48) * (basePrice * 0.008);
+      const noise = (Math.random() - 0.48) * (validBase * 0.008);
       const o = p;
       const c = Math.max(1.0, o + noise);
-      const h = Math.max(o, c) + Math.random() * (basePrice * 0.004);
-      const l = Math.min(o, c) - Math.random() * (basePrice * 0.004);
+      const h = Math.max(o, c) + Math.random() * (validBase * 0.004);
+      const l = Math.min(o, c) - Math.random() * (validBase * 0.004);
       const v = Math.round(Math.random() * 80 + 20);
+      const hours = String(t.getUTCHours()).padStart(2, '0');
       bars.push({
-        time: `${t.getUTCHours()}:00`,
+        time: `${hours}:00`,
         open: Math.round(o * 100) / 100,
         high: Math.round(h * 100) / 100,
         low: Math.round(l * 100) / 100,
@@ -1334,13 +1372,21 @@ class CandlestickChartEngine {
       });
       p = c;
     }
-    bars[bars.length - 1].close = basePrice;
-    bars[bars.length - 1].high = Math.max(bars[bars.length - 1].high, basePrice);
-    bars[bars.length - 1].low = Math.min(bars[bars.length - 1].low, basePrice);
+    bars[bars.length - 1].close = validBase;
+    bars[bars.length - 1].high = Math.max(bars[bars.length - 1].high, validBase);
+    bars[bars.length - 1].low = Math.min(bars[bars.length - 1].low, validBase);
     return bars;
   }
 
   onTick(symbol, price, volume) {
+    if (!price || typeof price !== 'number' || isNaN(price)) return;
+    // Disregard ticks destined for other assets
+    if (symbol && this.symbol) {
+      const symNorm = symbol.toUpperCase().replace(/[\/\-_]/g, '');
+      const chartNorm = this.symbol.toUpperCase().replace(/[\/\-_]/g, '');
+      if (symNorm !== chartNorm) return;
+    }
+
     if (!this.bars.length) {
       this.bars.push({
         time: 'Now',
@@ -1354,6 +1400,7 @@ class CandlestickChartEngine {
       this.render();
       return;
     }
+
     const last = this.bars[this.bars.length - 1];
     last.close = price;
     if (price > last.high) last.high = price;
@@ -1383,10 +1430,11 @@ class CandlestickChartEngine {
   }
 
   computeOverlays() {
-    const closes = this.bars.map(b => b.close);
+    const closes = this.bars.map(b => parseFloat(b.close) || 0);
     const n = closes.length;
+    if (n === 0) return { kama: [], bbUpper: [], bbLower: [], bbMid: [], ratchet: [], vwap: [] };
     
-    // 1. KAMA (10-period)
+    // 1. Kaufman Adaptive Moving Average (KAMA 10-period)
     const kama = [];
     let prevKama = closes[0];
     for (let i = 0; i < n; i++) {
@@ -1428,9 +1476,10 @@ class CandlestickChartEngine {
     const ratchet = [];
     let highestWatermark = closes[0];
     for (let i = 0; i < n; i++) {
-      const high = this.bars[i].high;
+      const high = parseFloat(this.bars[i].high) || closes[i];
+      const low = parseFloat(this.bars[i].low) || closes[i];
       if (high > highestWatermark) highestWatermark = high;
-      const atrEst = (this.bars[i].high - this.bars[i].low) || (closes[i] * 0.015);
+      const atrEst = (high - low) || (closes[i] * 0.015);
       const stop = highestWatermark - (2.5 * atrEst);
       const prevStop = i > 0 ? ratchet[i - 1] : stop;
       ratchet.push(Math.max(prevStop, stop));
@@ -1441,8 +1490,11 @@ class CandlestickChartEngine {
     let cumVol = 0;
     let cumNotional = 0;
     for (let i = 0; i < n; i++) {
-      const vol = this.bars[i].volume || 1;
-      const typical = (this.bars[i].high + this.bars[i].low + this.bars[i].close) / 3;
+      const vol = parseFloat(this.bars[i].volume) || 1;
+      const high = parseFloat(this.bars[i].high) || closes[i];
+      const low = parseFloat(this.bars[i].low) || closes[i];
+      const close = closes[i];
+      const typical = (high + low + close) / 3;
       cumVol += vol;
       cumNotional += typical * vol;
       vwap.push(cumVol > 0 ? cumNotional / cumVol : typical);
@@ -1451,23 +1503,55 @@ class CandlestickChartEngine {
     return { kama, bbUpper, bbLower, bbMid, ratchet, vwap };
   }
 
+  formatTimeLabel(timeStr) {
+    if (!timeStr) return '';
+    if (timeStr.includes('T')) {
+      const afterT = timeStr.split('T')[1];
+      if (afterT) return afterT.substring(0, 5);
+    }
+    if (timeStr.includes(':')) {
+      const parts = timeStr.split(':');
+      if (parts.length >= 2) return `${parts[0].slice(-2)}:${parts[1].substring(0, 2)}`;
+    }
+    return timeStr.length > 5 ? timeStr.slice(-5) : timeStr;
+  }
+
   render() {
     if (!this.canvas || !this.ctx) return;
+
+    // Resilient dimension lookup with automatic fallbacks
     const rect = this.canvas.getBoundingClientRect();
-    if (rect.width <= 0 || rect.height <= 0) return;
+    let width = rect.width;
+    let height = rect.height;
+
+    if (width <= 0) {
+      width = this.canvas.parentElement ? this.canvas.parentElement.clientWidth : 0;
+      if (width <= 0) width = this.canvas.clientWidth || 640;
+    }
+    if (height <= 0) {
+      height = this.canvas.parentElement ? this.canvas.parentElement.clientHeight : 0;
+      if (height <= 0) height = this.canvas.clientHeight || 340;
+    }
+
+    // Enforce CSS inline dimensions
+    if (!this.canvas.style.height || this.canvas.style.height === '0px') {
+      this.canvas.style.height = height + 'px';
+    }
 
     const dpr = window.devicePixelRatio || 1;
-    this.canvas.width = Math.round(rect.width * dpr);
-    this.canvas.height = Math.round(rect.height * dpr);
+    const targetW = Math.round(width * dpr);
+    const targetH = Math.round(height * dpr);
+
+    if (this.canvas.width !== targetW || this.canvas.height !== targetH) {
+      this.canvas.width = targetW;
+      this.canvas.height = targetH;
+    }
 
     const ctx = this.ctx;
     ctx.save();
     ctx.scale(dpr, dpr);
 
-    const width = rect.width;
-    const height = rect.height;
-
-    // Clear background
+    // Dark Bloomberg Terminal Background Fill
     ctx.fillStyle = '#111318';
     ctx.fillRect(0, 0, width, height);
 
@@ -1475,42 +1559,57 @@ class CandlestickChartEngine {
       ctx.fillStyle = '#57606a';
       ctx.font = '12px "JetBrains Mono", monospace';
       ctx.textAlign = 'center';
-      ctx.fillText('Loading candlestick data...', width / 2, height / 2);
+      ctx.fillText('Initializing candlestick feed...', width / 2, height / 2);
       ctx.restore();
       return;
     }
 
-    const rightMargin = 68;
-    const bottomMargin = 22;
-    const chartWidth = width - rightMargin;
-    const chartHeight = height - bottomMargin;
-    const priceAreaHeight = chartHeight * 0.76;
-    const volAreaTop = priceAreaHeight + 4;
-    const volAreaHeight = chartHeight - volAreaTop;
+    const topMargin = 14;
+    const rightMargin = 72;
+    const bottomMargin = 24;
+    const chartWidth = Math.max(100, width - rightMargin);
+    const chartHeight = Math.max(100, height - bottomMargin);
+
+    const priceAreaTop = topMargin;
+    const priceAreaHeight = Math.max(60, (chartHeight - topMargin) * 0.74);
+    const priceAreaBottom = priceAreaTop + priceAreaHeight;
+
+    const volAreaTop = priceAreaBottom + 6;
+    const volAreaHeight = Math.max(15, chartHeight - volAreaTop);
 
     const count = this.bars.length;
     const barStep = chartWidth / count;
-    const barWidth = Math.max(2, Math.min(22, barStep * 0.72));
+    const barWidth = Math.max(2.5, Math.min(22, barStep * 0.74));
 
-    // Calculate Price Bounds
+    // Calculate Dynamic Price Bounds
     let minPrice = Infinity;
     let maxPrice = -Infinity;
     let maxVol = 1;
 
     for (const b of this.bars) {
-      if (b.low < minPrice) minPrice = b.low;
-      if (b.high > maxPrice) maxPrice = b.high;
-      if (b.volume > maxVol) maxVol = b.volume;
+      const low = parseFloat(b.low) || 0;
+      const high = parseFloat(b.high) || 0;
+      const vol = parseFloat(b.volume) || 0;
+      if (low < minPrice) minPrice = low;
+      if (high > maxPrice) maxPrice = high;
+      if (vol > maxVol) maxVol = vol;
     }
 
     const pRange = maxPrice - minPrice || 1;
-    const pad = pRange * 0.06;
+    const pad = pRange * 0.05;
     minPrice -= pad;
     maxPrice += pad;
-    const effectiveRange = maxPrice - minPrice;
+    const effectiveRange = Math.max(0.001, maxPrice - minPrice);
 
-    const priceToY = (p) => priceAreaHeight - ((p - minPrice) / effectiveRange) * priceAreaHeight;
-    const yToPrice = (y) => minPrice + ((priceAreaHeight - y) / priceAreaHeight) * effectiveRange;
+    const priceToY = (p) => {
+      const clampedP = Math.max(minPrice, Math.min(maxPrice, parseFloat(p) || minPrice));
+      return priceAreaBottom - ((clampedP - minPrice) / effectiveRange) * priceAreaHeight;
+    };
+
+    const yToPrice = (y) => {
+      const clampedY = Math.max(priceAreaTop, Math.min(priceAreaBottom, y));
+      return minPrice + ((priceAreaBottom - clampedY) / priceAreaHeight) * effectiveRange;
+    };
 
     // 1. Grid Lines & Price Ticks
     ctx.lineWidth = 1;
@@ -1524,38 +1623,38 @@ class CandlestickChartEngine {
       const p = minPrice + (effectiveRange / priceTicks) * i;
       const y = Math.round(priceToY(p)) + 0.5;
       
-      // Horizontal grid
+      // Horizontal grid line
       ctx.beginPath();
       ctx.moveTo(0, y);
       ctx.lineTo(chartWidth, y);
       ctx.stroke();
 
-      // Price label on right margin
+      // Right margin price axis label
       const pLabel = p >= 1000 ? '$' + p.toLocaleString('en-US', { maximumFractionDigits: 1 }) : '$' + p.toFixed(2);
       ctx.fillText(pLabel, chartWidth + 6, y + 3.5);
     }
 
-    // Vertical time grid & labels
+    // Vertical time grid lines & timestamps
     const timeStep = Math.max(1, Math.floor(count / 6));
     for (let i = 0; i < count; i += timeStep) {
       const x = Math.round(i * barStep + barStep / 2) + 0.5;
       ctx.beginPath();
-      ctx.moveTo(x, 0);
+      ctx.moveTo(x, topMargin);
       ctx.lineTo(x, chartHeight);
       ctx.stroke();
 
-      const tStr = this.bars[i].time ? this.bars[i].time.slice(-5) : '';
+      const tStr = this.formatTimeLabel(this.bars[i].time);
       ctx.fillStyle = '#57606a';
       ctx.textAlign = 'center';
-      ctx.fillText(tStr, x, height - 6);
+      ctx.fillText(tStr, x, height - 7);
     }
 
-    // 2. Volume Bars (Bottom Area)
+    // 2. Volume Bars (Bottom Sub-panel)
     for (let i = 0; i < count; i++) {
       const b = this.bars[i];
-      const isBull = b.close >= b.open;
+      const isBull = parseFloat(b.close) >= parseFloat(b.open);
       const x = i * barStep + (barStep - barWidth) / 2;
-      const vH = Math.max(1, (b.volume / maxVol) * volAreaHeight);
+      const vH = Math.max(1.5, ((parseFloat(b.volume) || 0) / maxVol) * volAreaHeight);
       const y = chartHeight - vH;
 
       ctx.fillStyle = isBull ? 'rgba(15, 169, 104, 0.35)' : 'rgba(229, 72, 77, 0.35)';
@@ -1566,14 +1665,13 @@ class CandlestickChartEngine {
     const ind = this.computeOverlays();
 
     // Bollinger Bands
-    if (this.overlays.bbands) {
-      // Translucent fill between upper and lower
+    if (this.overlays.bbands && ind.bbUpper.length === count) {
+      // Translucent fill
       ctx.beginPath();
       for (let i = 0; i < count; i++) {
         const x = i * barStep + barStep / 2;
         const y = priceToY(ind.bbUpper[i]);
-        if (i === 0) ctx.moveTo(x, y);
-        else ctx.lineTo(x, y);
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
       }
       for (let i = count - 1; i >= 0; i--) {
         const x = i * barStep + barStep / 2;
@@ -1584,11 +1682,10 @@ class CandlestickChartEngine {
       ctx.fillStyle = 'rgba(217, 119, 6, 0.04)';
       ctx.fill();
 
-      // Band lines
+      // Upper band
       ctx.strokeStyle = 'rgba(217, 119, 6, 0.55)';
       ctx.lineWidth = 1;
       ctx.setLineDash([3, 3]);
-      // Upper
       ctx.beginPath();
       for (let i = 0; i < count; i++) {
         const x = i * barStep + barStep / 2;
@@ -1596,7 +1693,8 @@ class CandlestickChartEngine {
         if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
       }
       ctx.stroke();
-      // Lower
+
+      // Lower band
       ctx.beginPath();
       for (let i = 0; i < count; i++) {
         const x = i * barStep + barStep / 2;
@@ -1608,7 +1706,7 @@ class CandlestickChartEngine {
     }
 
     // Anchored VWAP
-    if (this.overlays.vwap) {
+    if (this.overlays.vwap && ind.vwap.length === count) {
       ctx.strokeStyle = '#a855f7';
       ctx.lineWidth = 1.2;
       ctx.setLineDash([2, 2]);
@@ -1623,7 +1721,7 @@ class CandlestickChartEngine {
     }
 
     // Kaufman Adaptive Moving Average (KAMA)
-    if (this.overlays.kama) {
+    if (this.overlays.kama && ind.kama.length === count) {
       ctx.strokeStyle = '#e6edf3';
       ctx.lineWidth = 1.5;
       ctx.beginPath();
@@ -1635,8 +1733,8 @@ class CandlestickChartEngine {
       ctx.stroke();
     }
 
-    // Chandelier Ratchet Trailing Stop (Stepped)
-    if (this.overlays.ratchet) {
+    // Dynamic Chandelier Ratchet Trailing Stop (Stepped)
+    if (this.overlays.ratchet && ind.ratchet.length === count) {
       ctx.strokeStyle = '#0fa968';
       ctx.lineWidth = 1.5;
       ctx.beginPath();
@@ -1655,41 +1753,51 @@ class CandlestickChartEngine {
       ctx.stroke();
     }
 
-    // 4. Candlesticks (Wicks + Bodies)
+    // 4. Japanese Candlesticks (Wicks + Bodies)
     for (let i = 0; i < count; i++) {
       const b = this.bars[i];
-      const isBull = b.close >= b.open;
+      const open = parseFloat(b.open);
+      const close = parseFloat(b.close);
+      const high = parseFloat(b.high);
+      const low = parseFloat(b.low);
+
+      const isBull = close >= open;
       const color = isBull ? '#0fa968' : '#e5484d';
       const xCenter = Math.round(i * barStep + barStep / 2) + 0.5;
 
-      const yHigh = priceToY(b.high);
-      const yLow = priceToY(b.low);
-      const yOpen = priceToY(b.open);
-      const yClose = priceToY(b.close);
+      const yHigh = priceToY(high);
+      const yLow = priceToY(low);
+      const yOpen = priceToY(open);
+      const yClose = priceToY(close);
 
-      // Wick
+      // Centered Upper and Lower Wicks
       ctx.strokeStyle = color;
-      ctx.lineWidth = 1;
+      ctx.lineWidth = 1.2;
       ctx.beginPath();
       ctx.moveTo(xCenter, yHigh);
       ctx.lineTo(xCenter, yLow);
       ctx.stroke();
 
-      // Body
+      // Candle Real Body
       const bodyTop = Math.min(yOpen, yClose);
       const bodyBottom = Math.max(yOpen, yClose);
-      const bodyH = Math.max(1.5, bodyBottom - bodyTop);
+      const bodyH = Math.max(2.0, bodyBottom - bodyTop);
       const bodyX = Math.round(xCenter - barWidth / 2);
 
       ctx.fillStyle = color;
       ctx.fillRect(bodyX, bodyTop, barWidth, bodyH);
+
+      // Crisp 1px outline for institutional definition
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 1;
+      ctx.strokeRect(bodyX, bodyTop, barWidth, bodyH);
     }
 
     // 5. Current Price Live Badge & Dashed Guide Line
     const lastBar = this.bars[count - 1];
-    const currPrice = lastBar.close;
+    const currPrice = parseFloat(lastBar.close);
     const currY = Math.round(priceToY(currPrice)) + 0.5;
-    const isCurrBull = lastBar.close >= lastBar.open;
+    const isCurrBull = parseFloat(lastBar.close) >= parseFloat(lastBar.open);
     const badgeColor = isCurrBull ? '#0fa968' : '#e5484d';
 
     ctx.strokeStyle = badgeColor;
@@ -1703,8 +1811,8 @@ class CandlestickChartEngine {
 
     // Right axis price badge
     ctx.fillStyle = badgeColor;
-    const badgeW = 62;
-    const badgeH = 17;
+    const badgeW = 66;
+    const badgeH = 18;
     ctx.fillRect(chartWidth + 3, currY - badgeH / 2, badgeW, badgeH);
 
     ctx.fillStyle = '#ffffff';
@@ -1725,12 +1833,12 @@ class CandlestickChartEngine {
 
       // Vertical line
       ctx.beginPath();
-      ctx.moveTo(hX, 0);
+      ctx.moveTo(hX, topMargin);
       ctx.lineTo(hX, chartHeight);
       ctx.stroke();
 
       // Horizontal line
-      if (hY <= priceAreaHeight) {
+      if (hY <= priceAreaBottom && hY >= priceAreaTop) {
         ctx.beginPath();
         ctx.moveTo(0, hY);
         ctx.lineTo(chartWidth, hY);
@@ -1755,15 +1863,15 @@ class CandlestickChartEngine {
       ctx.fillStyle = '#181c22';
       ctx.strokeStyle = '#8b949e';
       ctx.setLineDash([]);
-      const timeBadgeW = 54;
-      ctx.fillRect(hX - timeBadgeW / 2, height - 19, timeBadgeW, 16);
-      ctx.strokeRect(hX - timeBadgeW / 2, height - 19, timeBadgeW, 16);
+      const timeBadgeW = 58;
+      ctx.fillRect(hX - timeBadgeW / 2, height - 20, timeBadgeW, 16);
+      ctx.strokeRect(hX - timeBadgeW / 2, height - 20, timeBadgeW, 16);
 
       ctx.fillStyle = '#e6edf3';
       ctx.font = '9.5px "JetBrains Mono", monospace';
       ctx.textAlign = 'center';
-      const hTimeStr = hBar.time ? hBar.time.slice(-5) : '';
-      ctx.fillText(hTimeStr, hX, height - 7);
+      const hTimeStr = this.formatTimeLabel(hBar.time);
+      ctx.fillText(hTimeStr, hX, height - 8);
       ctx.setLineDash([]);
     }
 
@@ -1905,6 +2013,12 @@ window.switchWorkspace = function(wsName) {
 
   if (targetWs) targetWs.classList.add('active');
   if (targetBtn) targetBtn.classList.add('active');
+
+  if (wsName === 'terminal' && window.candlestickChart) {
+    setTimeout(() => {
+      window.candlestickChart.render();
+    }, 40);
+  }
 
   initIcons();
 };

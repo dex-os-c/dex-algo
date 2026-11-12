@@ -132,9 +132,16 @@ class MockAlpacaEngine:
 
     def get_position(self, symbol: str) -> Optional[Dict[str, Any]]:
         sym = symbol.upper()
-        if sym in self.positions:
+        clean_sym = sym.replace("/", "")
+        target_key = sym if sym in self.positions else (clean_sym if clean_sym in self.positions else None)
+        if not target_key:
+            for k in self.positions:
+                if k.upper().replace("/", "") == clean_sym:
+                    target_key = k
+                    break
+        if target_key:
             for p in self.get_positions():
-                if p["symbol"] == sym:
+                if p["symbol"].upper().replace("/", "") == clean_sym:
                     return p
         return None
 
@@ -214,11 +221,18 @@ class MockAlpacaEngine:
 
     def close_position(self, symbol: str) -> Dict[str, Any]:
         sym = symbol.upper()
-        if sym not in self.positions:
+        clean_sym = sym.replace("/", "")
+        target_key = sym if sym in self.positions else (clean_sym if clean_sym in self.positions else None)
+        if not target_key:
+            for k in list(self.positions.keys()):
+                if k.upper().replace("/", "") == clean_sym:
+                    target_key = k
+                    break
+        if not target_key:
             raise ValueError(f"No position found for {sym}")
-        pos = self.positions[sym]
+        pos = self.positions[target_key]
         qty = pos["qty"]
-        return self.create_order(symbol=sym, qty=qty, side="sell")
+        return self.create_order(symbol=target_key, qty=qty, side="sell")
 
     def get_latest_trade(self, symbol: str) -> Dict[str, Any]:
         px = self._get_live_price(symbol)

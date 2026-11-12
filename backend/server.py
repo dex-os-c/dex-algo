@@ -1159,8 +1159,7 @@ def reset_account(
 def get_market_bars(
     symbol: str = Query("BTC/USD", description="Symbol for OHLCV bars (e.g. BTC/USD, ETH/USD, SPY)"),
     timeframe: str = Query("1Min", description="Bar timeframe: 1Min, 5Min, 15Min, 1Hour, 1Day"),
-    limit: int = Query(60, ge=10, le=500),
-    _authorized: bool = Depends(verify_api_key)
+    limit: int = Query(60, ge=10, le=500)
 ):
     """Returns realistic/live OHLCV candlestick bars for high-fidelity charting."""
     try:
@@ -1186,14 +1185,15 @@ def get_market_bars(
         clean_bars = []
         for b in bars:
             ts = b.get("t", b.get("time", b.get("timestamp", "")))
+            c_val = b.get("c", b.get("close", 0.0))
             clean_bars.append({
                 "time": str(ts),
                 "open": round(float(b.get("o", b.get("open", 0.0))), 2),
                 "high": round(float(b.get("h", b.get("high", 0.0))), 2),
                 "low": round(float(b.get("l", b.get("low", 0.0))), 2),
-                "close": round(float(b.get("c", b.get("close", 0.0))), 2),
+                "close": round(float(c_val), 2),
                 "volume": round(float(b.get("v", b.get("volume", 0.0))), 4),
-                "vwap": round(float(b.get("vw", b.get("vwap", b.get("c", 0.0)))), 2)
+                "vwap": round(float(b.get("vw", b.get("vwap", c_val))), 2)
             })
 
         return database.sanitize_for_json({
@@ -1214,7 +1214,7 @@ def get_positions():
     return client.get_positions()
 
 
-@app.delete("/api/positions/{symbol}")
+@app.delete("/api/positions/{symbol:path}")
 def close_position(symbol: str):
     client = get_alpaca()
     try:

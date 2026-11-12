@@ -338,10 +338,10 @@
                   <span>Vol: <b id="hud-volume" class="text-[#38bdf8]">--</b></span>
                   <span>Chg: <b id="hud-change" class="text-[#0fa968]">--</b></span>
                 </div>
-                <div class="relative w-full h-[320px]">
-                  <canvas id="main-strategy-chart" class="w-full h-full block cursor-crosshair"></canvas>
-                  <canvas id="equity-chart" class="hidden w-full h-full"></canvas>
-                  <canvas id="underwater-chart" class="hidden w-full h-full"></canvas>
+                <div class="relative w-full chart-canvas-container" style="height: 340px; min-height: 340px;">
+                  <canvas id="main-strategy-chart" style="width: 100%; height: 340px; min-height: 340px; display: block;" class="w-full h-full block cursor-crosshair"></canvas>
+                  <canvas id="equity-chart" style="width: 100%; height: 340px; min-height: 340px;" class="hidden w-full h-full"></canvas>
+                  <canvas id="underwater-chart" style="width: 100%; height: 340px; min-height: 340px;" class="hidden w-full h-full"></canvas>
                 </div>
 
                 <!-- Bottom Indicator Status Ribbon -->
