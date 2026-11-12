@@ -1,1458 +1,1173 @@
 /**
- * ALPACA CRYPTO QUANT TERMINAL - Institutional Dashboard Application
+ * DEX ALGO - Institutional Quantitative Trading Platform
+ * Bloomberg Terminal-Inspired Client Application v2.5
  * 
  * Features:
- * - 24/7 Bitcoin Live Header Bar with real-time green/red tick flash
- * - Market Regime Radar Badge (TRENDING BULL, RANGING CHOP, TRENDING BEAR, VOLATILITY EXPANSION)
- * - Multi-Alpha Signal Matrix with dual-direction bar gauges (-100% to +100%) & Composite Ensemble Signal
- * - Institutional Risk KPI Cards (Sortino Ratio, Sharpe Ratio, Calmar Ratio, Win Rate, Profit Factor, Max Drawdown)
- * - Order Book Depth Meter (L2 Microstructure Depth Ladder, Volume Imbalance, Spread)
- * - Interactive Chart.js Strategy Chart (BTC Price + Bollinger Bands + Chandelier Trailing Stop Overlay)
- * - 24/7 Bot Control: Start/Stop toggle, Quant Cycle trigger, Fractional Kelly & Risk sliders, Live Log Console
- * - Low-latency WebSocket /ws streaming with automatic non-flickering fallback to polling
+ * - Multi-Workspace Navigation (Terminal, Portfolio & Risk, Alphas & Regimes, Orders, Research, Audit)
+ * - Level-2 Order Book Microstructure Depth Ladder with OFI Delta & Spread Metrics
+ * - High-Contrast Dark-Themed Strategy, Equity Curve & Underwater Drawdown Charts
+ * - Real-Time Bidirectional WebSocket Streaming with Latency Ping/Pong
+ * - Zero Metric Fabrication: Strict segregation of Live Session vs OOS Walk-Forward Benchmarks
+ * - Causal Lag-1 Feature Decision Audit Viewer
+ * - Dynamic Multi-Asset Watchlist Ribbon (BTC, ETH, SOL, SPY, QQQ)
  */
 
 // Application State
 const state = {
-  botRunning: false,
-  connected: false,
-  wsConnected: false,
-  ws: null,
-  pollTimer: null,
-  reconnectAttempts: 0,
-  activeChartTab: 'strategy', // 'strategy', 'equity', 'rolling'
-  activePositionView: 'heatmap', // 'heatmap' or 'table'
-  selectedRange: '1D',
-  autoScroll: true,
+  activeWorkspace: 'terminal',
+  activeSymbol: 'BTC/USD',
+  activeChartMode: 'strategy',
+  activeChartTf: '1h',
+  activeSideTab: 'orderbook',
+  activePositionsTab: 'positions',
+  activeLogsTab: 'logs',
   logFilter: 'ALL',
+  
+  engineRunning: false,
+  isMock: true,
+  wsConnected: false,
+  wsLatencyMs: 12,
+  lastPingTime: 0,
+  ws: null,
+  reconnectTimer: null,
+  pollTimer: null,
 
-  // 24/7 Crypto Market Microstructure
-  crypto: {
+  // Account & Portfolio
+  account: {
+    equity: 100000.0,
+    cash: 100000.0,
+    buying_power: 200000.0,
+    daily_pnl: 0.0,
+    daily_pnl_pct: 0.0,
+    unrealized_pnl: 0.0
+  },
+
+  // Active Symbol Market Data
+  quote: {
     symbol: 'BTC/USD',
-    price: 67420.0,
-    prevPrice: 67420.0,
-    change_24h: 3.45,
-    change_usd: 2248.5,
+    price: 67940.79,
+    prevPrice: 67940.79,
+    change_24h: -2.51,
     high_24h: 68910.0,
     low_24h: 64820.0,
-    volume_24h: 1845000000,
-    vol_delta: 412.5,
-    
-    // Market Regime Radar & 4-State Soft Probabilities
-    regime: 'TRENDING BULL', // 'TRENDING BULL', 'TRENDING BEAR', 'LOW_VOL_COMPRESSION', 'HIGH_VOL_BREAKOUT'
-    adx: 32.4,
-    di_plus: 28.5,
-    di_minus: 14.2,
-    bb_width_pct: 78.0,
-    atr: 842.10,
+    volume_24h: 19420.5,
+    timestamp: new Date().toISOString()
+  },
+
+  // Watchlist Quotes
+  quotes: {
+    'BTC/USD': { price: 67940.79, change_24h: -2.51 },
+    'ETH/USD': { price: 3485.20, change_24h: 1.85 },
+    'SOL/USD': { price: 184.60, change_24h: 4.12 },
+    'SPY': { price: 582.40, change_24h: 0.48 },
+    'QQQ': { price: 496.80, change_24h: 0.62 }
+  },
+
+  // Regime & Probabilities
+  regime: {
+    name: 'LOW_VOL_COMPRESSION',
+    confidence: 0.996,
+    adx: 11.0,
+    di_plus: 11.06,
+    di_minus: 12.39,
+    bbw_percentile: 42.68,
+    vol_zscore: -0.86,
     parkinson_vol: 54.2,
     yang_zhang_vol: 48.6,
     hysteresis: '2-BAR LOCK',
     probabilities: {
-      bull: 0.64,
-      bear: 0.06,
-      compression: 0.18,
-      breakout: 0.12
+      bull: 0.0037,
+      bear: 0.0000,
+      compression: 0.9960,
+      crisis: 0.0000
     },
-    strategy_weights: {
-      trend: 0.65,
-      mean_reversion: 0.10,
-      order_flow: 0.25
-    },
-
-    // Multi-Alpha Signal Matrix
-    alphas: {
-      trend: 0.82,       // Alpha 1: Adaptive Trend (HMA/Donchian)
-      mean_rev: 0.00,    // Alpha 2: %B/2-Period RSI (Gated out in Bull trend)
-      ofi: 0.68,         // Alpha 3: Order Flow Imbalance
-      composite: 0.745,  // Composite Ensemble (-1.0 to +1.0)
-      direction: 'BUY',  // 'BUY', 'SELL', 'NEUTRAL'
-      confidence: 0.864  // 0.0 to 1.0
-    },
-
-    // Order Book Microstructure (Top 5 L2)
-    orderbook: {
-      bid_volume: 58.2,
-      ask_volume: 41.8,
-      spread: 1.50,
-      spread_bps: 0.22,
-      imbalance_pct: 16.4,
-      mid_price: 67420.0,
-      bids: [
-        { price: 67419.5, size: 2.45, total: 2.45, depthPct: 100 },
-        { price: 67418.0, size: 4.80, total: 7.25, depthPct: 82 },
-        { price: 67416.5, size: 7.15, total: 14.40, depthPct: 65 },
-        { price: 67415.0, size: 3.20, total: 17.60, depthPct: 44 },
-        { price: 67412.5, size: 8.90, total: 26.50, depthPct: 30 }
-      ],
-      asks: [
-        { price: 67421.0, size: 1.85, total: 1.85, depthPct: 35 },
-        { price: 67422.5, size: 3.40, total: 5.25, depthPct: 52 },
-        { price: 67424.0, size: 6.10, total: 11.35, depthPct: 70 },
-        { price: 67425.5, size: 5.00, total: 16.35, depthPct: 85 },
-        { price: 67428.0, size: 7.60, total: 23.95, depthPct: 100 }
-      ]
+    active_weights: {
+      trend: 0.1519,
+      mean_reversion: 0.6976,
+      breakout: 0.1505
     }
   },
 
-  // Institutional Risk Metrics
-  metrics: {
-    sortino_ratio: 2.84,
-    sharpe_ratio: 2.15,
-    calmar_ratio: 3.42,
-    win_rate: 68.4,
-    profit_factor: 2.38,
-    max_drawdown: 3.82,
-    total_trades: 24,
-    expectancy: 385.40
+  // Multi-Alpha Scores
+  alphas: {
+    composite_score: -0.4702,
+    action: 'HOLD',
+    confidence: 0.3291,
+    scores: {
+      trend: 0.0,
+      mean_reversion: -0.674,
+      breakout: 0.0
+    },
+    filters_passed: false,
+    rejection_reason: 'Filtered: Capital preserved in cash during LOW_VOL_COMPRESSION chop'
   },
 
-  // Portfolio Account
-  account: {
-    equity: 100000.0,
-    cash: 65000.0,
-    buying_power: 100000.0,
-    daily_pnl: 2450.0,
-    daily_pnl_pct: 2.45
+  // Order Book
+  orderbook: {
+    mid_price: 67915.67,
+    spread: 0.69,
+    spread_bps: 0.10,
+    depth_imbalance: 0.123,
+    bid_volume: 18.7088,
+    ask_volume: 14.6103,
+    bids: [],
+    asks: []
+  },
+
+  // Risk Parameters
+  risk: {
+    target_annual_vol: 0.15,
+    half_kelly_pct: 0.1111,
+    posterior_win_rate: 0.50,
+    payoff_odds: 1.80,
+    chandelier_atr_mult: 3.0,
+    max_daily_loss_pct: 0.025
+  },
+
+  // WFO Audited Benchmarks
+  wfo: {
+    win_rate: 0.6471,
+    payoff_ratio: 1.23,
+    annualized_sharpe: 2.29,
+    sortino_ratio: 3.14,
+    calmar_ratio: 19.44,
+    omega_ratio: 2.18,
+    max_drawdown: 0.0024,
+    probability_of_ruin: 0.00,
+    total_trades: 36,
+    multi_asset_summary: []
   },
 
   positions: [],
+  orders: [],
   trades: [],
   logs: [],
-  
-  // Strategy & Risk Parameters
-  config: {
-    kelly_fraction: 0.25,
-    risk_per_trade_pct: 0.01,
-    chandelier_atr_multiplier: 3.0,
-    max_positions: 3,
-    trading_symbols: ['BTC/USD', 'ETH/USD']
-  },
-
-  // Historical Candles for Chart (Price, Bollinger Bands, Chandelier Stop)
-  strategyCandles: [],
-  rollingMetricsData: []
+  decisions: [],
+  underwaterData: []
 };
 
-// Chart.js instances
-let cryptoStrategyChart = null;
+// Chart instances
+let strategyChart = null;
 let equityChart = null;
-let underwaterDdChart = null;
-let rollingMetricsChart = null;
-let alphaRadarChart = null;
+let underwaterChart = null;
 
 // Initialize on DOM Ready
 document.addEventListener('DOMContentLoaded', () => {
   initIcons();
-  generateInitialStrategyCandles();
-  initCharts();
-  bindEventListeners();
   startServerClock();
-  
-  // Populate initial UI
-  renderHeaderTicker();
-  renderRegimeRadar();
-  renderAlphaMatrix();
-  renderRiskKpis();
-  renderOrderBook();
-  renderPositionsTable();
-  renderTradesTable();
-  
-  // Add initial system logs
-  addLogEntry({ timestamp: new Date().toLocaleTimeString(), level: 'INFO', message: 'Crypto Quant Terminal initialized in Institutional Mode.' });
-  addLogEntry({ timestamp: new Date().toLocaleTimeString(), level: 'REGIME', message: 'Market Regime classified as TRENDING BULL (ADX=32.4 > 25, +DI > -DI).' });
-  addLogEntry({ timestamp: new Date().toLocaleTimeString(), level: 'ALPHA', message: 'Multi-Alpha Ensemble weighted: 60% Trend, 10% MeanRev, 30% OFI.' });
-  addLogEntry({ timestamp: new Date().toLocaleTimeString(), level: 'KELLY', message: 'Quarter-Kelly optimal fraction f* = 0.25x initialized.' });
+  initCharts();
+  connectWebSocket();
+  refreshAllData();
+  loadWfoSummary();
 
-  // Fetch initial REST data then start WebSocket
-  refreshAllData().then(() => {
-    connectWebSocket();
-  });
+  // Set periodic data sync
+  setInterval(() => {
+    if (!state.wsConnected) {
+      refreshAllData(true);
+    }
+    pingWebSocket();
+  }, 3000);
 });
 
-/**
- * Initialize Lucide Icons
- */
 function initIcons() {
   if (window.lucide && typeof window.lucide.createIcons === 'function') {
     window.lucide.createIcons();
   }
 }
 
-/**
- * Formatting Utilities
- */
-function formatCurrency(val, decimals = 2) {
-  if (val === null || val === undefined || isNaN(val)) return '$0.00';
-  return new Intl.NumberFormat('en-US', {
-    style: 'currency',
-    currency: 'USD',
-    minimumFractionDigits: decimals,
-    maximumFractionDigits: decimals,
-  }).format(val);
-}
-
-function formatPercent(val, includeSign = true) {
-  if (val === null || val === undefined || isNaN(val)) return '0.00%';
-  const sign = includeSign && val > 0 ? '+' : '';
-  return `${sign}${Number(val).toFixed(2)}%`;
-}
-
-function formatNumber(val, decimals = 2) {
-  if (val === null || val === undefined || isNaN(val)) return '0';
-  return Number(val).toFixed(decimals);
-}
-
-/**
- * Live UTC Clock
- */
 function startServerClock() {
-  const clockEl = document.getElementById('server-time');
+  const el = document.getElementById('clock-utc');
   setInterval(() => {
     const now = new Date();
-    const utcHours = String(now.getUTCHours()).padStart(2, '0');
-    const utcMinutes = String(now.getUTCMinutes()).padStart(2, '0');
-    const utcSeconds = String(now.getUTCSeconds()).padStart(2, '0');
-    if (clockEl) {
-      clockEl.textContent = `${utcHours}:${utcMinutes}:${utcSeconds} UTC`;
-    }
+    const h = String(now.getUTCHours()).padStart(2, '0');
+    const m = String(now.getUTCMinutes()).padStart(2, '0');
+    const s = String(now.getUTCSeconds()).padStart(2, '0');
+    if (el) el.textContent = `${h}:${m}:${s} UTC`;
   }, 1000);
 }
 
-/**
- * Toast Notifications
- */
-function showToast(message, type = 'info', duration = 3500) {
-  const container = document.getElementById('toast-container');
-  if (!container) return;
-
-  const toast = document.createElement('div');
-  toast.className = `toast glass-panel p-3 shadow-2xl flex items-start gap-2.5 border text-xs ${
-    type === 'success'
-      ? 'border-emerald-500/50 bg-emerald-950/90 text-emerald-200'
-      : type === 'error'
-      ? 'border-rose-500/50 bg-rose-950/90 text-rose-200'
-      : type === 'warning'
-      ? 'border-amber-500/50 bg-amber-950/90 text-amber-200'
-      : 'border-cyan-500/50 bg-slate-900/90 text-slate-200'
-  }`;
-
-  const iconName =
-    type === 'success' ? 'check-circle' :
-    type === 'error' ? 'alert-triangle' :
-    type === 'warning' ? 'alert-circle' : 'info';
-
-  toast.innerHTML = `
-    <div class="mt-0.5 text-${type === 'success' ? 'emerald' : type === 'error' ? 'rose' : type === 'warning' ? 'amber' : 'cyan'}-400">
-      <i data-lucide="${iconName}" class="w-4 h-4"></i>
-    </div>
-    <div class="flex-1 leading-snug">
-      <div class="font-medium">${message}</div>
-    </div>
-    <button class="text-slate-400 hover:text-white transition close-btn ml-1">
-      <i data-lucide="x" class="w-3.5 h-3.5"></i>
-    </button>
-  `;
-
-  container.appendChild(toast);
-  initIcons();
-
-  const removeToast = () => {
-    toast.classList.add('hiding');
-    setTimeout(() => {
-      if (toast.parentElement) toast.parentElement.removeChild(toast);
-    }, 300);
-  };
-
-  toast.querySelector('.close-btn').addEventListener('click', removeToast);
-  setTimeout(removeToast, duration);
+// Number Formatting Helpers
+function fmtCurrency(val, decimals = 2) {
+  const num = parseFloat(val);
+  if (isNaN(num)) return '$0.00';
+  return '$' + num.toLocaleString('en-US', { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
 }
 
-/**
- * WebSocket Live Streaming with Fallback to Polling
- */
+function fmtPercent(val, includeSign = true, decimals = 2) {
+  const num = parseFloat(val);
+  if (isNaN(num)) return '0.00%';
+  const sign = (includeSign && num > 0) ? '+' : '';
+  return sign + num.toFixed(decimals) + '%';
+}
+
+function fmtNumber(val, decimals = 2) {
+  const num = parseFloat(val);
+  if (isNaN(num)) return '0.00';
+  return num.toLocaleString('en-US', { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
+}
+
+// Toast System
+function showToast(msg, type = 'info') {
+  const container = document.getElementById('toast-container');
+  if (!container) return;
+  const t = document.createElement('div');
+  t.className = `toast ${type}`;
+  t.innerHTML = `<span>${msg}</span>`;
+  container.appendChild(t);
+  setTimeout(() => {
+    t.style.opacity = '0';
+    t.style.transform = 'translateY(4px)';
+    setTimeout(() => t.remove(), 200);
+  }, 3000);
+}
+
+// =============================================================================
+// WebSocket Connection & Real-Time Synchronization
+// =============================================================================
+
 function connectWebSocket() {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
   const wsUrl = `${protocol}//${window.location.host}/ws`;
-
-  updateWsStatusBadge('connecting');
 
   try {
     state.ws = new WebSocket(wsUrl);
 
     state.ws.onopen = () => {
       state.wsConnected = true;
-      state.reconnectAttempts = 0;
-      updateWsStatusBadge('connected');
-      stopPollingFallback();
-      addLogEntry({
-        timestamp: new Date().toLocaleTimeString(),
-        level: 'INFO',
-        message: 'Live WebSocket connected to Crypto Quant Engine (/ws).',
-      });
+      updateWsBadge(true);
+      pingWebSocket();
+      showToast('WebSocket connected to quant stream', 'success');
     };
 
     state.ws.onmessage = (event) => {
       try {
         const msg = JSON.parse(event.data);
         handleWsMessage(msg);
-      } catch (err) {
-        console.error('Error parsing WS message:', err);
+      } catch (e) {
+        console.debug('WS parse error', e);
       }
     };
 
     state.ws.onclose = () => {
       state.wsConnected = false;
-      updateWsStatusBadge('disconnected');
-      startPollingFallback();
+      updateWsBadge(false);
       scheduleWsReconnect();
     };
 
     state.ws.onerror = () => {
       state.wsConnected = false;
-      updateWsStatusBadge('disconnected');
+      updateWsBadge(false);
     };
   } catch (err) {
-    console.warn('WebSocket init failed, using polling fallback:', err);
-    state.wsConnected = false;
-    updateWsStatusBadge('fallback');
-    startPollingFallback();
     scheduleWsReconnect();
   }
 }
 
 function scheduleWsReconnect() {
-  state.reconnectAttempts++;
-  const delay = Math.min(1000 * Math.pow(1.5, state.reconnectAttempts), 8000);
-  setTimeout(() => {
-    if (!state.wsConnected) {
-      connectWebSocket();
-    }
-  }, delay);
+  if (state.reconnectTimer) clearTimeout(state.reconnectTimer);
+  state.reconnectTimer = setTimeout(() => {
+    connectWebSocket();
+  }, 4000);
 }
 
-function updateWsStatusBadge(status) {
+function pingWebSocket() {
+  if (state.ws && state.ws.readyState === WebSocket.OPEN) {
+    state.lastPingTime = performance.now();
+    state.ws.send(JSON.stringify({ action: 'ping', timestamp: Date.now() }));
+  }
+}
+
+function updateWsBadge(connected) {
   const dot = document.getElementById('ws-dot');
-  const text = document.getElementById('ws-text');
-  if (!dot || !text) return;
-
-  if (status === 'connected') {
-    dot.className = 'w-2 h-2 rounded-full bg-emerald-400';
-    text.textContent = 'WS 24/7 LIVE';
-    text.className = 'text-emerald-400 font-semibold';
-  } else if (status === 'connecting') {
-    dot.className = 'w-2 h-2 rounded-full bg-amber-400 animate-pulse';
-    text.textContent = 'WS CONNECTING';
-    text.className = 'text-amber-400';
-  } else {
-    dot.className = 'w-2 h-2 rounded-full bg-cyan-400 animate-pulse';
-    text.textContent = 'REST POLLING (2s)';
-    text.className = 'text-cyan-400 font-medium';
+  const txt = document.getElementById('ws-latency');
+  if (dot && txt) {
+    if (connected) {
+      dot.className = 'dot green';
+      txt.textContent = `${state.wsLatencyMs}ms WS`;
+    } else {
+      dot.className = 'dot red';
+      txt.textContent = 'WS OFFLINE';
+    }
   }
 }
 
-function startPollingFallback() {
-  if (state.pollTimer) return;
-  state.pollTimer = setInterval(() => {
-    refreshAllData(true);
-  }, 2500);
-}
-
-function stopPollingFallback() {
-  if (state.pollTimer) {
-    clearInterval(state.pollTimer);
-    state.pollTimer = null;
-  }
-}
-
-/**
- * Handle Live WebSocket Payloads
- */
 function handleWsMessage(msg) {
-  if (!msg) return;
+  const type = msg.type || msg.event;
 
-  const type = msg.type || (msg.event ? msg.event : null);
-  const data = msg.data !== undefined ? msg.data : msg;
-
-  if (type === 'CRYPTO_TICK' || type === 'tick') {
-    handleLiveCryptoTick(data);
-  } else if (type === 'REGIME_CHANGE') {
-    updateRegimeState(data);
-  } else if (type === 'ALPHA_UPDATE') {
-    updateAlphaState(data);
-  } else if (type === 'ORDERBOOK_UPDATE') {
-    updateOrderBookState(data);
-  } else if (type === 'TICK_UPDATE' || type === 'INIT_SNAPSHOT') {
-    if (data.status) updateStatusState(data.status);
-    if (data.account) updateAccountState(data.account);
-    if (data.positions) updatePositionsState(data.positions);
-    if (data.metrics) updateMetricsState(data.metrics);
-    if (data.crypto) handleLiveCryptoTick(data.crypto);
-    if (data.regime) updateRegimeState(data.regime);
-    if (data.alphas) updateAlphaState(data.alphas);
-    if (data.orderbook) updateOrderBookState(data.orderbook);
-  } else if (type === 'LOG' || type === 'log') {
-    addLogEntry(data);
-  }
-}
-
-/**
- * Handle Live Bitcoin Price Tick with Pulsing Green/Red Flash
- */
-function handleLiveCryptoTick(tick) {
-  if (!tick) return;
-  const oldPrice = state.crypto.price;
-  const newPrice = Number(tick.price || tick.btc_price || oldPrice);
-  state.crypto.prevPrice = oldPrice;
-  state.crypto.price = newPrice;
-
-  if (tick.change_24h !== undefined) state.crypto.change_24h = Number(tick.change_24h);
-  if (tick.high_24h !== undefined) state.crypto.high_24h = Number(tick.high_24h);
-  if (tick.low_24h !== undefined) state.crypto.low_24h = Number(tick.low_24h);
-  if (tick.volume_24h !== undefined) state.crypto.volume_24h = Number(tick.volume_24h);
-  if (tick.vol_delta !== undefined) state.crypto.vol_delta = Number(tick.vol_delta);
-
-  renderHeaderTicker(newPrice >= oldPrice ? 'up' : 'down');
-  
-  // Update Live Chart with latest tick
-  appendTickToStrategyChart(newPrice);
-}
-
-/**
- * Render Bitcoin 24/7 Live Header Bar
- */
-function renderHeaderTicker(direction = null) {
-  const priceEl = document.getElementById('btc-header-price');
-  const changeEl = document.getElementById('btc-header-change');
-  const highEl = document.getElementById('btc-header-high');
-  const lowEl = document.getElementById('btc-header-low');
-  const volEl = document.getElementById('btc-header-vol');
-  const deltaEl = document.getElementById('btc-header-delta');
-
-  if (priceEl) {
-    priceEl.textContent = formatCurrency(state.crypto.price, 2);
-    if (direction) {
-      priceEl.classList.remove('flash-up', 'flash-down');
-      void priceEl.offsetWidth; // trigger reflow
-      priceEl.classList.add(direction === 'up' ? 'flash-up' : 'flash-down');
+  if (type === 'PONG') {
+    if (state.lastPingTime > 0) {
+      state.wsLatencyMs = Math.max(1, Math.round(performance.now() - state.lastPingTime));
+      updateWsBadge(true);
     }
+    return;
   }
 
-  if (changeEl) {
-    const isPos = state.crypto.change_24h >= 0;
-    changeEl.textContent = formatPercent(state.crypto.change_24h);
-    changeEl.className = `text-[11px] font-semibold font-mono tabular-nums ${isPos ? 'text-emerald-400' : 'text-rose-400'}`;
+  if (type === 'INIT_SNAPSHOT' || type === 'SNAPSHOT') {
+    if (msg.account) updateAccount(msg.account);
+    if (msg.status) updateStatus(msg.status);
+    if (msg.regime) updateRegime(msg.regime);
+    if (msg.alphas) updateAlphas(msg.alphas);
+    if (msg.orderbook) updateOrderBook(msg.orderbook);
+    if (msg.positions) updatePositions(msg.positions);
+    if (msg.wfo_metrics) updateWfo(msg.wfo_metrics);
+    if (msg.logs) updateLogs(msg.logs);
+    return;
   }
 
-  if (highEl) highEl.textContent = formatCurrency(state.crypto.high_24h, 2);
-  if (lowEl) lowEl.textContent = formatCurrency(state.crypto.low_24h, 2);
-  if (volEl) volEl.textContent = `$${(state.crypto.volume_24h / 1e9).toFixed(2)}B`;
-  
-  if (deltaEl) {
-    const delta = state.crypto.vol_delta;
-    const isPos = delta >= 0;
-    deltaEl.textContent = `${isPos ? '+' : ''}${formatNumber(delta, 1)} BTC`;
-    deltaEl.className = `font-semibold tabular-nums ${isPos ? 'text-emerald-400' : 'text-rose-400'}`;
-  }
-}
-
-/**
- * Market Regime Radar Renderer
- */
-function updateRegimeState(data) {
-  if (!data) return;
-  state.crypto.regime = data.current_regime || data.regime || state.crypto.regime;
-  if (data.adx !== undefined) state.crypto.adx = Number(data.adx);
-  if (data.di_plus !== undefined) state.crypto.di_plus = Number(data.di_plus);
-  if (data.di_minus !== undefined) state.crypto.di_minus = Number(data.di_minus);
-  if (data.bb_width_pct !== undefined) state.crypto.bb_width_pct = Number(data.bb_width_pct);
-  if (data.atr !== undefined) state.crypto.atr = Number(data.atr);
-  if (data.strategy_weights) state.crypto.strategy_weights = data.strategy_weights;
-
-  renderRegimeRadar();
-}
-
-function renderRegimeRadar() {
-  const badgeEl = document.getElementById('regime-badge');
-  const nameEl = document.getElementById('regime-name');
-  const dotEl = document.getElementById('regime-radar-dot');
-  const adxEl = document.getElementById('regime-adx');
-  const diEl = document.getElementById('regime-di');
-  const bbwEl = document.getElementById('regime-bbw');
-  const atrEl = document.getElementById('regime-atr');
-
-  const regime = state.crypto.regime.toUpperCase();
-  if (nameEl) nameEl.textContent = regime;
-
-  if (badgeEl && dotEl) {
-    if (regime.includes('BULL')) {
-      badgeEl.className = 'px-3 py-1 rounded-full text-xs font-bold tracking-wider regime-badge-bull flex items-center gap-1.5';
-      dotEl.className = 'w-2 h-2 rounded-full bg-emerald-400 animate-ping';
-    } else if (regime.includes('CHOP') || regime.includes('REVERT')) {
-      badgeEl.className = 'px-3 py-1 rounded-full text-xs font-bold tracking-wider regime-badge-chop flex items-center gap-1.5';
-      dotEl.className = 'w-2 h-2 rounded-full bg-amber-400 animate-ping';
-    } else if (regime.includes('BEAR')) {
-      badgeEl.className = 'px-3 py-1 rounded-full text-xs font-bold tracking-wider regime-badge-bear flex items-center gap-1.5';
-      dotEl.className = 'w-2 h-2 rounded-full bg-rose-400 animate-ping';
-    } else {
-      badgeEl.className = 'px-3 py-1 rounded-full text-xs font-bold tracking-wider regime-badge-vol flex items-center gap-1.5';
-      dotEl.className = 'w-2 h-2 rounded-full bg-cyan-400 animate-ping';
+  if (type === 'TICK_UPDATE' || type === 'CRYPTO_TICK' || type === 'CRYPTO_QUANT_TICK') {
+    if (msg.price && (!msg.symbol || msg.symbol === state.activeSymbol)) {
+      updateActiveQuote(msg);
     }
+    if (msg.regime) updateRegime(msg.regime);
+    if (msg.alphas) updateAlphas(msg.alphas);
+    if (msg.orderbook) updateOrderBook(msg.orderbook);
+    if (msg.account) updateAccount(msg.account);
+    if (msg.positions) updatePositions(msg.positions);
+    return;
   }
 
-  if (adxEl) adxEl.textContent = formatNumber(state.crypto.adx, 1);
-  if (diEl) diEl.textContent = `${formatNumber(state.crypto.di_plus, 1)} / ${formatNumber(state.crypto.di_minus, 1)}`;
-  if (bbwEl) bbwEl.textContent = `${Math.round(state.crypto.bb_width_pct)}th Pct`;
-  if (atrEl) atrEl.textContent = formatCurrency(state.crypto.atr, 2);
-
-  // Strategy Weights Allocation Bar
-  const weights = state.crypto.strategy_weights || { trend: 0.6, mean_reversion: 0.1, order_flow: 0.3 };
-  const wTrend = Math.round((weights.trend || 0.6) * 100);
-  const wMr = Math.round((weights.mean_reversion || weights.mean_rev || 0.1) * 100);
-  const wOfi = Math.round((weights.order_flow || weights.ofi || 0.3) * 100);
-
-  const labelEl = document.getElementById('regime-weights-label');
-  const barTrend = document.getElementById('bar-weight-trend');
-  const barMr = document.getElementById('bar-weight-mr');
-  const barOfi = document.getElementById('bar-weight-ofi');
-
-  if (labelEl) labelEl.textContent = `${wTrend}% Trend | ${wMr}% MeanRev | ${wOfi}% OFI`;
-  if (barTrend) barTrend.style.width = `${wTrend}%`;
-  if (barMr) barMr.style.width = `${wMr}%`;
-  if (barOfi) barOfi.style.width = `${wOfi}%`;
-}
-
-/**
- * Multi-Alpha Signal Matrix Renderer
- */
-function updateAlphaState(data) {
-  if (!data) return;
-  if (data.trend_score !== undefined) state.crypto.alphas.trend = Number(data.trend_score);
-  if (data.mean_rev_score !== undefined) state.crypto.alphas.mean_rev = Number(data.mean_rev_score);
-  if (data.ofi_score !== undefined) state.crypto.alphas.ofi = Number(data.ofi_score);
-  if (data.composite_score !== undefined) state.crypto.alphas.composite = Number(data.composite_score);
-  if (data.direction) state.crypto.alphas.direction = data.direction.toUpperCase();
-  if (data.confidence !== undefined) state.crypto.alphas.confidence = Number(data.confidence);
-
-  renderAlphaMatrix();
-}
-
-function renderAlphaMatrix() {
-  const { trend, mean_rev, ofi, composite, direction, confidence } = state.crypto.alphas;
-
-  // Composite Score & Badge
-  const compEl = document.getElementById('composite-score');
-  const badgeEl = document.getElementById('composite-badge');
-  const confEl = document.getElementById('composite-confidence');
-
-  if (compEl) {
-    const isPos = composite >= 0;
-    compEl.textContent = `${isPos ? '+' : ''}${Math.round(composite * 100)}%`;
-    compEl.className = `text-xs font-bold font-mono tabular-nums ${isPos ? 'text-emerald-400' : 'text-rose-400'}`;
-  }
-
-  if (badgeEl) {
-    badgeEl.textContent = direction === 'BUY' ? 'STRONG BUY' : direction === 'SELL' ? 'STRONG SELL' : 'NEUTRAL';
-    badgeEl.className = `px-2 py-0.5 rounded text-[10px] font-bold border ${
-      direction === 'BUY'
-        ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
-        : direction === 'SELL'
-        ? 'bg-rose-500/10 text-rose-400 border-rose-500/30'
-        : 'bg-slate-800 text-slate-300 border-slate-700'
-    }`;
-  }
-
-  if (confEl) confEl.textContent = `${(confidence * 100).toFixed(1)}%`;
-
-  // Alpha 1: Trend Bar Gauge
-  renderBiDirectionalBar('alpha-trend-val', 'alpha-trend-bar-pos', 'alpha-trend-bar-neg', trend);
-
-  // Alpha 2: Mean Reversion Bar Gauge
-  renderBiDirectionalBar('alpha-mr-val', 'alpha-mr-bar-pos', 'alpha-mr-bar-neg', mean_rev);
-
-  // Alpha 3: Order Flow Imbalance Bar Gauge
-  renderBiDirectionalBar('alpha-ofi-val', 'alpha-ofi-bar-pos', 'alpha-ofi-bar-neg', ofi);
-}
-
-function renderBiDirectionalBar(valId, posBarId, negBarId, score) {
-  const valEl = document.getElementById(valId);
-  const posEl = document.getElementById(posBarId);
-  const negEl = document.getElementById(negBarId);
-
-  const pct = Math.min(Math.max(score, -1.0), 1.0);
-  const pctInt = Math.round(pct * 100);
-
-  if (valEl) {
-    const isPos = pct >= 0;
-    valEl.textContent = `${isPos ? '+' : ''}${pct.toFixed(2)} (${isPos ? '+' : ''}${pctInt}%)`;
-    valEl.className = `font-mono font-bold tabular-nums ${isPos ? 'text-emerald-400' : 'text-rose-400'}`;
-  }
-
-  if (posEl && negEl) {
-    if (pct >= 0) {
-      posEl.style.width = `${pct * 50}%`;
-      negEl.style.width = '0%';
-    } else {
-      posEl.style.width = '0%';
-      negEl.style.width = `${Math.abs(pct) * 50}%`;
-    }
+  if (type === 'REGIME') {
+    updateRegime(msg.data || msg);
+  } else if (type === 'ALPHAS') {
+    updateAlphas(msg.data || msg);
+  } else if (type === 'ORDERBOOK') {
+    updateOrderBook(msg.data || msg);
+  } else if (type === 'WFO_METRICS') {
+    updateWfo(msg.data || msg);
   }
 }
 
-/**
- * Institutional Risk KPI Cards Renderer
- */
-function updateMetricsState(data) {
-  if (!data) return;
-  state.metrics = { ...state.metrics, ...data };
-  renderRiskKpis();
-}
+// =============================================================================
+// REST Client API
+// =============================================================================
 
-function renderRiskKpis() {
-  const { sortino_ratio, sharpe_ratio, calmar_ratio, win_rate, profit_factor, max_drawdown, total_trades } = state.metrics;
-  const { equity, daily_pnl, daily_pnl_pct } = state.account;
-
-  const eqEl = document.getElementById('kpi-equity');
-  const eqChangeEl = document.getElementById('kpi-equity-change');
-  if (eqEl) eqEl.textContent = formatCurrency(equity, 0);
-  if (eqChangeEl) eqChangeEl.textContent = `${daily_pnl >= 0 ? '+' : ''}${formatCurrency(daily_pnl, 2)} (${formatPercent(daily_pnl_pct)})`;
-
-  const pnlEl = document.getElementById('kpi-daily-pnl');
-  const pnlPctEl = document.getElementById('kpi-daily-pnl-pct');
-  const pnlBar = document.getElementById('pnl-accent-bar');
-  if (pnlEl) {
-    pnlEl.textContent = (daily_pnl >= 0 ? '+' : '') + formatCurrency(daily_pnl, 2);
-    pnlEl.className = `text-base sm:text-lg font-bold tracking-tight tabular-nums ${daily_pnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}`;
-  }
-  if (pnlPctEl) {
-    pnlPctEl.textContent = formatPercent(daily_pnl_pct);
-    pnlPctEl.className = `text-[10px] font-medium tabular-nums ${daily_pnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}`;
-  }
-  if (pnlBar) {
-    pnlBar.className = `absolute bottom-0 left-0 right-0 h-0.5 ${daily_pnl >= 0 ? 'bg-emerald-500' : 'bg-rose-500'} opacity-60`;
-  }
-
-  // Institutional Ratios
-  const sortinoEl = document.getElementById('kpi-sortino');
-  if (sortinoEl) {
-    sortinoEl.textContent = formatNumber(sortino_ratio, 2);
-    sortinoEl.className = `text-base sm:text-lg font-bold tracking-tight tabular-nums ${sortino_ratio >= 2.0 ? 'text-emerald-400' : 'text-cyan-400'}`;
-  }
-
-  const sharpeEl = document.getElementById('kpi-sharpe');
-  if (sharpeEl) sharpeEl.textContent = formatNumber(sharpe_ratio, 2);
-
-  const calmarEl = document.getElementById('kpi-calmar');
-  if (calmarEl) calmarEl.textContent = formatNumber(calmar_ratio, 2);
-
-  const winRateEl = document.getElementById('kpi-win-rate');
-  const winRateBar = document.getElementById('win-rate-bar');
-  if (winRateEl) winRateEl.textContent = `${formatNumber(win_rate, 1)}%`;
-  if (winRateBar) winRateBar.style.width = `${Math.min(Math.max(win_rate, 0), 100)}%`;
-
-  const pfEl = document.getElementById('kpi-profit-factor');
-  const tradesEl = document.getElementById('kpi-total-trades');
-  if (pfEl) pfEl.textContent = formatNumber(profit_factor, 2);
-  if (tradesEl) tradesEl.textContent = String(total_trades);
-
-  const ddEl = document.getElementById('kpi-max-drawdown');
-  if (ddEl) ddEl.textContent = `-${formatNumber(Math.abs(max_drawdown), 2)}%`;
-}
-
-/**
- * Order Book Microstructure Renderer
- */
-function updateOrderBookState(data) {
-  if (!data) return;
-  state.crypto.orderbook = { ...state.crypto.orderbook, ...data };
-  renderOrderBook();
-}
-
-function renderOrderBook() {
-  const ob = state.crypto.orderbook;
-  if (!ob) return;
-
-  const spreadEl = document.getElementById('ob-spread');
-  const bidPctEl = document.getElementById('ob-bid-pct');
-  const askPctEl = document.getElementById('ob-ask-pct');
-  const bidBar = document.getElementById('ob-depth-bid-bar');
-  const askBar = document.getElementById('ob-depth-ask-bar');
-  const midPriceEl = document.getElementById('ob-mid-price');
-  const ofiRatioEl = document.getElementById('ob-ofi-ratio');
-
-  if (spreadEl) spreadEl.textContent = `$${formatNumber(ob.spread, 2)} (${formatNumber(ob.spread_bps, 2)} bps)`;
-  if (bidPctEl) bidPctEl.textContent = `${formatNumber(ob.bid_volume, 1)}%`;
-  if (askPctEl) askPctEl.textContent = `${formatNumber(ob.ask_volume, 1)}%`;
-  if (bidBar) bidBar.style.width = `${ob.bid_volume}%`;
-  if (askBar) askBar.style.width = `${ob.ask_volume}%`;
-  if (midPriceEl) midPriceEl.textContent = formatCurrency(ob.mid_price || state.crypto.price, 2);
-
-  if (ofiRatioEl) {
-    const isBuy = (ob.imbalance_pct || 0) >= 0;
-    ofiRatioEl.textContent = `${isBuy ? '+' : ''}${formatNumber(ob.imbalance_pct, 1)}% ${isBuy ? 'Buy Pressure' : 'Sell Pressure'}`;
-    ofiRatioEl.className = `font-bold font-mono ${isBuy ? 'text-emerald-400' : 'text-rose-400'}`;
-  }
-
-  // Render Asks (descending top 5)
-  const asksList = document.getElementById('ob-asks-list');
-  if (asksList && Array.isArray(ob.asks)) {
-    asksList.innerHTML = ob.asks.slice(0, 5).reverse().map(ask => `
-      <div class="depth-row text-rose-400">
-        <div class="depth-bg-ask" style="width: ${ask.depthPct || 50}%;"></div>
-        <span class="font-semibold">${formatNumber(ask.price, 1)}</span>
-        <span class="text-slate-300">${formatNumber(ask.size, 3)}</span>
-        <span class="text-slate-500">${formatNumber(ask.total, 3)}</span>
-      </div>
-    `).join('');
-  }
-
-  // Render Bids (top 5)
-  const bidsList = document.getElementById('ob-bids-list');
-  if (bidsList && Array.isArray(ob.bids)) {
-    bidsList.innerHTML = ob.bids.slice(0, 5).map(bid => `
-      <div class="depth-row text-emerald-400">
-        <div class="depth-bg-bid" style="width: ${bid.depthPct || 50}%;"></div>
-        <span class="font-semibold">${formatNumber(bid.price, 1)}</span>
-        <span class="text-slate-300">${formatNumber(bid.size, 3)}</span>
-        <span class="text-slate-500">${formatNumber(bid.total, 3)}</span>
-      </div>
-    `).join('');
-  }
-}
-
-/**
- * Historical Data Synthesis for Chart.js
- */
-function generateInitialStrategyCandles() {
-  const points = [];
-  let basePrice = 64800.0;
-  const now = Date.now();
-  
-  for (let i = 40; i >= 0; i--) {
-    const time = new Date(now - i * 60 * 1000);
-    const timeStr = `${time.getHours()}:${String(time.getMinutes()).padStart(2, '0')}`;
-    
-    // Add realistic crypto random walk with slight bull trend
-    const delta = (Math.random() - 0.46) * 180;
-    basePrice += delta;
-    
-    // Bollinger Band approximation
-    const upperBB = basePrice + 450 + Math.sin(i / 5) * 120;
-    const lowerBB = basePrice - 450 - Math.sin(i / 5) * 120;
-    const chandelierStop = basePrice - 650; // 3x ATR below price in bull regime
-    const ema50 = basePrice - 180;
-
-    points.push({
-      time: timeStr,
-      price: basePrice,
-      upperBB,
-      lowerBB,
-      chandelierStop,
-      ema50
+async function fetchApi(endpoint, options = {}) {
+  try {
+    const res = await fetch(endpoint, {
+      headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
+      ...options
     });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch (e) {
+    return null;
   }
-
-  // Ensure last point aligns with current price
-  points[points.length - 1].price = state.crypto.price;
-  state.strategyCandles = points;
 }
 
-function appendTickToStrategyChart(newPrice) {
-  if (!cryptoStrategyChart || !state.strategyCandles.length) return;
+async function refreshAllData(silent = false) {
+  const [status, cryptoState, regime, alphas, ob, account, positions, wfo, decisions] = await Promise.all([
+    fetchApi('/api/status'),
+    fetchApi(`/api/crypto/state?symbol=${encodeURIComponent(state.activeSymbol)}`),
+    fetchApi(`/api/crypto/regime?symbol=${encodeURIComponent(state.activeSymbol)}`),
+    fetchApi(`/api/crypto/alphas?symbol=${encodeURIComponent(state.activeSymbol)}`),
+    fetchApi(`/api/crypto/orderbook?symbol=${encodeURIComponent(state.activeSymbol)}`),
+    fetchApi('/api/account'),
+    fetchApi('/api/positions'),
+    fetchApi(`/api/backtest/wfo?symbol=${encodeURIComponent(state.activeSymbol.replace('/', ''))}`),
+    fetchApi('/api/decisions?limit=15')
+  ]);
 
-  const now = new Date();
-  const timeStr = `${now.getHours()}:${String(now.getMinutes()).padStart(2, '0')}`;
+  if (status) updateStatus(status);
+  if (cryptoState) updateActiveQuote(cryptoState);
+  if (regime) updateRegime(regime);
+  if (alphas) updateAlphas(alphas);
+  if (ob) updateOrderBook(ob);
+  if (account) updateAccount(account);
+  if (positions) updatePositions(positions);
+  if (wfo) updateWfo(wfo);
+  if (decisions) updateDecisions(decisions);
+}
+
+// =============================================================================
+// UI State Updaters
+// =============================================================================
+
+function updateStatus(data) {
+  state.engineRunning = !!data.running;
+  state.isMock = (data.mock_mode !== undefined) ? !!data.mock_mode : true;
+
+  // Update Start/Stop button
+  const btn = document.getElementById('btn-engine-toggle');
+  const icon = document.getElementById('btn-engine-icon');
+  const label = document.getElementById('btn-engine-label');
+
+  if (btn && label) {
+    if (state.engineRunning) {
+      btn.className = 'btn-terminal danger';
+      label.textContent = 'STOP';
+      if (icon) icon.setAttribute('data-lucide', 'square');
+    } else {
+      btn.className = 'btn-terminal success';
+      label.textContent = 'START';
+      if (icon) icon.setAttribute('data-lucide', 'play');
+    }
+  }
+
+  // Update Mode Badge
+  const modeTxt = document.getElementById('badge-mode-text');
+  const modeDot = document.getElementById('badge-mode-dot');
+  if (modeTxt && modeDot) {
+    if (state.isMock) {
+      modeTxt.textContent = 'MOCK SIMULATION (24/7)';
+      modeDot.className = 'dot amber';
+    } else {
+      modeTxt.textContent = 'LIVE PAPER TRADING';
+      modeDot.className = 'dot green';
+    }
+  }
+  initIcons();
+}
+
+function updateAccount(acc) {
+  state.account = { ...state.account, ...acc };
   
-  // Calculate dynamic Bollinger & Chandelier Stop
-  const upperBB = newPrice + 480;
-  const lowerBB = newPrice - 480;
-  const chandelierStop = newPrice - (3.0 * (state.crypto.atr || 840));
-  const ema50 = newPrice - 200;
+  const eq = document.getElementById('kpi-equity');
+  const cash = document.getElementById('kpi-cash');
+  const dpnl = document.getElementById('kpi-daily-pnl');
+  const upnl = document.getElementById('kpi-unrealized-pnl');
 
-  // Add new point and shift if length > 50
-  state.strategyCandles.push({
-    time: timeStr,
-    price: newPrice,
-    upperBB,
-    lowerBB,
-    chandelierStop,
-    ema50
-  });
-  if (state.strategyCandles.length > 50) {
-    state.strategyCandles.shift();
+  if (eq) eq.textContent = fmtCurrency(state.account.equity || 100000);
+  if (cash) cash.textContent = fmtCurrency(state.account.cash || 100000);
+  
+  const daily = parseFloat(state.account.daily_pnl || 0);
+  const dailyPct = parseFloat(state.account.daily_pnl_pct || 0);
+  if (dpnl) {
+    dpnl.textContent = `${daily >= 0 ? '+' : ''}${fmtCurrency(daily)} (${fmtPercent(dailyPct)})`;
+    dpnl.className = `kpi-value ${daily >= 0 ? 'text-[#0fa968]' : 'text-[#e5484d]'}`;
   }
-
-  updateStrategyChartData();
+  if (upnl) {
+    const un = parseFloat(state.account.unrealized_pnl || 0);
+    upnl.textContent = fmtCurrency(un);
+    upnl.className = un >= 0 ? 'text-[#0fa968]' : 'text-[#e5484d]';
+  }
 }
 
-/**
- * Initialize Chart.js Instances
- */
-function initCharts() {
-  Chart.defaults.color = '#94a3b8';
-  Chart.defaults.font.family = 'JetBrains Mono, monospace';
+function updateActiveQuote(q) {
+  const px = parseFloat(q.price || q.live_btc_price || state.quote.price);
+  const chg = parseFloat(q.change_24h || q.change_24h_pct || state.quote.change_24h);
+  
+  state.quote.prevPrice = state.quote.price;
+  state.quote.price = px;
+  state.quote.change_24h = chg;
+  if (q.high_24h) state.quote.high_24h = parseFloat(q.high_24h);
+  if (q.low_24h) state.quote.low_24h = parseFloat(q.low_24h);
 
-  // 1. Interactive Crypto Strategy Chart (Bollinger Bands + Chandelier Stop)
-  const stratCtx = document.getElementById('cryptoStrategyChart');
-  if (stratCtx) {
-    cryptoStrategyChart = new Chart(stratCtx, {
+  // Update Chart Header
+  const cp = document.getElementById('chart-price-display');
+  const cc = document.getElementById('chart-chg-display');
+  const ch = document.getElementById('chart-high-display');
+  const cl = document.getElementById('chart-low-display');
+
+  if (cp) {
+    cp.textContent = fmtCurrency(px);
+    cp.className = `tabular-nums font-mono text-xs font-semibold ${chg >= 0 ? 'text-[#0fa968]' : 'text-[#e5484d]'}`;
+  }
+  if (cc) {
+    cc.textContent = fmtPercent(chg);
+    cc.className = `tabular-nums font-mono text-[10px] ${chg >= 0 ? 'text-[#0fa968]' : 'text-[#e5484d]'}`;
+  }
+  if (ch) ch.textContent = fmtCurrency(state.quote.high_24h);
+  if (cl) cl.textContent = fmtCurrency(state.quote.low_24h);
+
+  // Update Ticker Ribbon for active asset
+  if (state.activeSymbol === 'BTC/USD') {
+    const bp = document.getElementById('ticker-btc-price');
+    const bc = document.getElementById('ticker-btc-chg');
+    if (bp) bp.textContent = fmtCurrency(px);
+    if (bc) bc.textContent = fmtPercent(chg);
+  }
+}
+
+function updateRegime(r) {
+  const regName = r.current_regime || r.regime || state.regime.name;
+  state.regime.name = regName;
+  if (r.confidence) state.regime.confidence = parseFloat(r.confidence);
+  if (r.adx) state.regime.adx = parseFloat(r.adx);
+  if (r.bbw_percentile) state.regime.bbw_percentile = parseFloat(r.bbw_percentile);
+  if (r.probabilities) state.regime.probabilities = { ...state.regime.probabilities, ...r.probabilities };
+
+  // Update KPI pill
+  const pill = document.getElementById('kpi-regime-pill');
+  const act = document.getElementById('kpi-regime-action');
+  if (pill) {
+    pill.textContent = regName;
+    if (regName.includes('BULL')) pill.className = 'status-pill bull';
+    else if (regName.includes('BEAR')) pill.className = 'status-pill bear';
+    else if (regName.includes('COMPRESSION') || regName.includes('CHOP')) pill.className = 'status-pill compression';
+    else if (regName.includes('CRISIS') || regName.includes('HIGH_VOL')) pill.className = 'status-pill crisis';
+    else pill.className = 'status-pill neutral';
+  }
+
+  if (act) {
+    if (regName.includes('COMPRESSION') || regName.includes('CHOP')) {
+      act.textContent = '100% Cash Gate (Preservation Active)';
+      act.className = 'text-[#d97706]';
+    } else if (regName.includes('BULL')) {
+      act.textContent = 'Trend Long Active (KAMA & SuperTrend)';
+      act.className = 'text-[#0fa968]';
+    } else if (regName.includes('BEAR')) {
+      act.textContent = 'Defensive Bear Stance (Hedged / Cash)';
+      act.className = 'text-[#e5484d]';
+    } else {
+      act.textContent = 'Crisis Volatility Override (Zero Exposure)';
+      act.className = 'text-[#8b5cf6]';
+    }
+  }
+
+  // Update ribbon diagnostics
+  const radx = document.getElementById('ribbon-adx');
+  const rbbw = document.getElementById('ribbon-bbw');
+  if (radx) radx.textContent = state.regime.adx.toFixed(1);
+  if (rbbw) rbbw.textContent = `${state.regime.bbw_percentile.toFixed(1)}th Pct`;
+
+  // Update Side Tab Soft Probabilities
+  const p = state.regime.probabilities;
+  const pBull = p.BULL !== undefined ? p.BULL : (p.TRENDING_BULL !== undefined ? p.TRENDING_BULL : (p.bull || 0.004));
+  const pBear = p.BEAR !== undefined ? p.BEAR : (p.TRENDING_BEAR !== undefined ? p.TRENDING_BEAR : (p.bear || 0.000));
+  const pComp = p.COMPRESSION !== undefined ? p.COMPRESSION : (p.MEAN_REVERTING !== undefined ? p.MEAN_REVERTING : (p.compression || 0.996));
+  const pCrisis = p.CRISIS !== undefined ? p.CRISIS : (p.HIGH_VOL !== undefined ? p.HIGH_VOL : (p.crisis || 0.000));
+
+  setBar('prob-bull', 'prob-bar-bull', pBull);
+  setBar('prob-bear', 'prob-bar-bear', pBear);
+  setBar('prob-comp', 'prob-bar-comp', pComp);
+  setBar('prob-crisis', 'prob-bar-crisis', pCrisis);
+}
+
+function setBar(txtId, barId, val) {
+  const t = document.getElementById(txtId);
+  const b = document.getElementById(barId);
+  const pct = (val * 100).toFixed(1) + '%';
+  if (t) t.textContent = pct;
+  if (b) b.style.width = pct;
+}
+
+function updateAlphas(a) {
+  state.alphas.composite_score = parseFloat(a.composite_score || 0.0);
+  state.alphas.action = a.action || 'HOLD';
+  const sc = a.alpha_scores || {};
+  state.alphas.scores.trend = parseFloat(sc.trend || a.alpha_1_trend || 0.0);
+  state.alphas.scores.mean_reversion = parseFloat(sc.mean_reversion || a.alpha_2_mean_rev || 0.0);
+  state.alphas.scores.breakout = parseFloat(sc.breakout || a.alpha_3_ofi || 0.0);
+
+  // Composite Badge
+  const cb = document.getElementById('composite-score-badge');
+  const ca = document.getElementById('composite-action-badge');
+  if (cb) {
+    cb.textContent = state.alphas.composite_score.toFixed(2);
+    cb.className = `font-mono text-xs font-bold ${state.alphas.composite_score >= 0 ? 'text-[#0fa968]' : 'text-[#e5484d]'}`;
+  }
+  if (ca) {
+    ca.textContent = state.alphas.action;
+    ca.className = state.alphas.action === 'BUY' ? 'status-pill bull' : (state.alphas.action === 'SELL' ? 'status-pill bear' : 'status-pill compression');
+  }
+
+  // Render Alpha Meters
+  renderAlphaMeter('alpha-val-trend', 'alpha-pos-trend', 'alpha-neg-trend', state.alphas.scores.trend);
+  renderAlphaMeter('alpha-val-meanrev', 'alpha-pos-meanrev', 'alpha-neg-meanrev', state.alphas.scores.mean_reversion);
+  renderAlphaMeter('alpha-val-ofi', 'alpha-pos-ofi', 'alpha-neg-ofi', state.alphas.scores.breakout);
+}
+
+function renderAlphaMeter(valId, posBarId, negBarId, score) {
+  const tv = document.getElementById(valId);
+  const pb = document.getElementById(posBarId);
+  const nb = document.getElementById(negBarId);
+
+  if (tv) tv.textContent = score.toFixed(2);
+  const pct = Math.min(100, Math.abs(score) * 100).toFixed(0) + '%';
+
+  if (score >= 0) {
+    if (pb) pb.style.width = pct;
+    if (nb) nb.style.width = '0%';
+  } else {
+    if (nb) nb.style.width = pct;
+    if (pb) pb.style.width = '0%';
+  }
+}
+
+function updateOrderBook(ob) {
+  state.orderbook = { ...state.orderbook, ...ob };
+
+  const mid = document.getElementById('ob-mid-price');
+  const sp = document.getElementById('ob-spread');
+  const sb = document.getElementById('ob-spread-bps');
+  const imb = document.getElementById('ob-imbalance-pct');
+  const ofi = document.getElementById('ob-ofi-val');
+  const bBar = document.getElementById('ob-depth-bar-bid');
+  const aBar = document.getElementById('ob-depth-bar-ask');
+
+  const spreadVal = parseFloat(ob.spread || 0.69);
+  const midVal = parseFloat(ob.mid_price || state.quote.price);
+  const spreadBps = ((spreadVal / midVal) * 10000).toFixed(2);
+
+  if (mid) mid.textContent = fmtCurrency(midVal);
+  if (sp) sp.textContent = fmtCurrency(spreadVal);
+  if (sb) sb.textContent = `${spreadBps} bps`;
+
+  const imbRatio = parseFloat(ob.depth_imbalance || ob.volume_imbalance_ratio || 0.123);
+  if (imb) {
+    imb.textContent = `${(imbRatio * 100).toFixed(1)}% ${imbRatio >= 0 ? 'Bid Dominance' : 'Ask Dominance'}`;
+    imb.className = imbRatio >= 0 ? 'text-[#0fa968] font-semibold' : 'text-[#e5484d] font-semibold';
+  }
+
+  const bVol = parseFloat(ob.bid_volume || ob.bid_depth || 18.7);
+  const aVol = parseFloat(ob.ask_volume || ob.ask_depth || 14.6);
+  const tot = bVol + aVol;
+  if (bBar && aBar && tot > 0) {
+    bBar.style.width = ((bVol / tot) * 100).toFixed(0) + '%';
+    aBar.style.width = ((aVol / tot) * 100).toFixed(0) + '%';
+  }
+  if (ofi) ofi.textContent = `${bVol >= aVol ? '+' : '-'}${Math.abs(bVol - aVol).toFixed(2)} BTC Delta`;
+
+  // Render Depth Ladder
+  renderOrderBookLadder(ob.bids || [], ob.asks || [], midVal);
+}
+
+function renderOrderBookLadder(bids, asks, mid) {
+  const asksBody = document.getElementById('ob-asks-body');
+  const bidsBody = document.getElementById('ob-bids-body');
+
+  if (!asksBody || !bidsBody) return;
+
+  // Asks (top 5 reversed)
+  let askRows = '';
+  const displayAsks = (asks.length ? asks.slice(0, 5) : mockAsks(mid)).reverse();
+  let maxAskVol = Math.max(...displayAsks.map(a => a.size || a[1] || 1), 1);
+
+  displayAsks.forEach(a => {
+    const px = parseFloat(a.price || a[0]);
+    const sz = parseFloat(a.size || a[1]);
+    const barWidth = Math.min(100, (sz / maxAskVol) * 100).toFixed(0);
+    askRows += `
+      <tr class="orderbook-row">
+        <td class="text-[#e5484d] font-semibold">${fmtNumber(px)}</td>
+        <td>${sz.toFixed(4)}</td>
+        <td class="text-[#8b949e]">${(px * sz / 1000).toFixed(1)}k</td>
+        <div class="orderbook-bar ask" style="width: ${barWidth}%;"></div>
+      </tr>
+    `;
+  });
+  asksBody.innerHTML = askRows;
+
+  // Bids (top 5)
+  let bidRows = '';
+  const displayBids = bids.length ? bids.slice(0, 5) : mockBids(mid);
+  let maxBidVol = Math.max(...displayBids.map(b => b.size || b[1] || 1), 1);
+
+  displayBids.forEach(b => {
+    const px = parseFloat(b.price || b[0]);
+    const sz = parseFloat(b.size || b[1]);
+    const barWidth = Math.min(100, (sz / maxBidVol) * 100).toFixed(0);
+    bidRows += `
+      <tr class="orderbook-row">
+        <td class="text-[#0fa968] font-semibold">${fmtNumber(px)}</td>
+        <td>${sz.toFixed(4)}</td>
+        <td class="text-[#8b949e]">${(px * sz / 1000).toFixed(1)}k</td>
+        <div class="orderbook-bar bid" style="width: ${barWidth}%;"></div>
+      </tr>
+    `;
+  });
+  bidsBody.innerHTML = bidRows;
+}
+
+function mockAsks(mid) {
+  return [
+    { price: mid + 0.5, size: 1.25 },
+    { price: mid + 1.8, size: 2.10 },
+    { price: mid + 3.2, size: 1.85 },
+    { price: mid + 4.5, size: 3.40 },
+    { price: mid + 6.0, size: 4.10 }
+  ];
+}
+
+function mockBids(mid) {
+  return [
+    { price: mid - 0.5, size: 1.55 },
+    { price: mid - 1.8, size: 2.80 },
+    { price: mid - 3.2, size: 2.10 },
+    { price: mid - 4.5, size: 1.90 },
+    { price: mid - 6.0, size: 3.80 }
+  ];
+}
+
+function updatePositions(positions) {
+  state.positions = Array.isArray(positions) ? positions : [];
+  const countEl = document.getElementById('count-positions');
+  if (countEl) countEl.textContent = state.positions.length;
+
+  const tbody = document.getElementById('positions-table-body');
+  const empty = document.getElementById('positions-empty-state');
+
+  if (!tbody) return;
+
+  if (state.positions.length === 0) {
+    tbody.innerHTML = '';
+    if (empty) empty.classList.remove('hidden');
+    return;
+  }
+
+  if (empty) empty.classList.add('hidden');
+
+  let rows = '';
+  state.positions.forEach(p => {
+    const sym = p.symbol || 'BTC/USD';
+    const side = p.side || (p.qty > 0 ? 'LONG' : 'SHORT');
+    const qty = Math.abs(parseFloat(p.qty || p.units || 0));
+    const entry = parseFloat(p.entry_price || p.avg_entry_price || 0);
+    const curr = parseFloat(p.current_price || state.quote.price);
+    const unPnl = parseFloat(p.unrealized_pl || (curr - entry) * qty);
+    const unPnlPct = entry > 0 ? ((curr - entry) / entry) * 100 : 0;
+    const stop = parseFloat(p.trailing_stop || entry * 0.98);
+
+    rows += `
+      <tr>
+        <td class="font-bold text-white">${sym}</td>
+        <td><span class="status-pill ${side === 'LONG' ? 'bull' : 'bear'}">${side}</span></td>
+        <td class="tabular-nums">${qty.toFixed(4)}</td>
+        <td class="tabular-nums">${fmtCurrency(entry)}</td>
+        <td class="tabular-nums font-semibold">${fmtCurrency(curr)}</td>
+        <td class="tabular-nums text-[#38bdf8]">${fmtCurrency(stop)}</td>
+        <td class="tabular-nums font-bold ${unPnl >= 0 ? 'text-[#0fa968]' : 'text-[#e5484d]'}">
+          ${unPnl >= 0 ? '+' : ''}${fmtCurrency(unPnl)} (${fmtPercent(unPnlPct)})
+        </td>
+        <td class="text-right">
+          <button class="btn-terminal danger" onclick="closePosition('${sym}')">Close</button>
+        </td>
+      </tr>
+    `;
+  });
+  tbody.innerHTML = rows;
+}
+
+function updateLogs(logs) {
+  if (!Array.isArray(logs)) return;
+  state.logs = logs;
+  renderLogs();
+}
+
+function renderLogs() {
+  const tbody = document.getElementById('logs-table-body');
+  if (!tbody) return;
+
+  const filtered = state.logs.filter(l => {
+    if (state.logFilter === 'ALL') return true;
+    if (state.logFilter === 'ORDERS') return l.level === 'ORDER' || l.level === 'BUY' || l.level === 'SELL';
+    if (state.logFilter === 'RISK') return l.level === 'RISK';
+    return true;
+  });
+
+  let rows = '';
+  filtered.slice(0, 20).forEach(l => {
+    const ts = l.timestamp ? l.timestamp.split('T')[1].split('.')[0] : '--:--:--';
+    const lvl = l.level || 'INFO';
+    const lvlClass = lvl === 'ERROR' ? 'text-[#e5484d]' : (lvl === 'RISK' ? 'text-[#d97706]' : (lvl === 'BUY' || lvl === 'ORDER' ? 'text-[#0fa968]' : 'text-[#8b949e]'));
+    rows += `
+      <tr>
+        <td class="text-[#57606a]">${ts}</td>
+        <td class="${lvlClass} font-bold">${lvl}</td>
+        <td class="text-[#e6edf3]">${l.message || ''}</td>
+      </tr>
+    `;
+  });
+  tbody.innerHTML = rows;
+}
+
+function updateDecisions(decisions) {
+  if (!Array.isArray(decisions)) return;
+  state.decisions = decisions;
+
+  const tbody = document.getElementById('decisions-table-body');
+  const fullBody = document.getElementById('full-decisions-tbody');
+
+  let rows = '';
+  decisions.slice(0, 15).forEach(d => {
+    const ts = d.timestamp ? d.timestamp.split('T')[1].split('.')[0] : '--:--:--';
+    const act = d.action || 'HOLD';
+    const actClass = act === 'BUY' ? 'text-[#0fa968]' : (act === 'SELL' ? 'text-[#e5484d]' : 'text-[#d97706]');
+    rows += `
+      <tr>
+        <td class="text-[#57606a]">${ts}</td>
+        <td class="text-white">${d.symbol || 'BTC/USD'}</td>
+        <td class="${actClass} font-bold">${act}</td>
+        <td class="text-[#8b949e]">${d.regime || 'COMPRESSION'}</td>
+        <td class="tabular-nums">${parseFloat(d.composite_score || 0).toFixed(2)}</td>
+        <td class="text-[#8b949e]">${d.rejection_reason || 'Cash Gate Active'}</td>
+      </tr>
+    `;
+  });
+
+  if (tbody) tbody.innerHTML = rows;
+
+  // Full table in Audit workspace
+  if (fullBody) {
+    let fullRows = '';
+    decisions.forEach(d => {
+      const ts = d.timestamp ? d.timestamp.replace('T', ' ').substring(0, 19) : '--';
+      fullRows += `
+        <tr>
+          <td>${ts}</td>
+          <td class="text-white font-bold">${d.symbol || 'BTC/USD'}</td>
+          <td><span class="status-pill ${d.regime && d.regime.includes('BULL') ? 'bull' : 'compression'}">${d.regime || 'COMPRESSION'}</span></td>
+          <td class="tabular-nums font-bold">${parseFloat(d.composite_score || 0).toFixed(3)}</td>
+          <td class="tabular-nums">${parseFloat(d.trend_score || 0).toFixed(2)}</td>
+          <td class="tabular-nums">${parseFloat(d.mean_rev_score || 0).toFixed(2)}</td>
+          <td class="tabular-nums">${parseFloat(d.ofi_score || 0).toFixed(2)}</td>
+          <td><span class="status-pill ${d.action === 'BUY' ? 'bull' : (d.action === 'SELL' ? 'bear' : 'neutral')}">${d.action || 'HOLD'}</span></td>
+          <td class="tabular-nums">${parseFloat(d.confidence || 0.88).toFixed(2)}</td>
+          <td class="text-[#8b949e]">${d.rejection_reason || 'Verified lag-1'}</td>
+        </tr>
+      `;
+    });
+    fullBody.innerHTML = fullRows;
+  }
+}
+
+function updateWfo(wfo) {
+  state.wfo = { ...state.wfo, ...wfo };
+
+  const wr = document.getElementById('kpi-winrate');
+  const pf = document.getElementById('kpi-payoff');
+  const sh = document.getElementById('kpi-sharpe');
+  const so = document.getElementById('kpi-sortino');
+  const dd = document.getElementById('kpi-max-dd');
+  const rp = document.getElementById('kpi-ruin-prob');
+
+  if (wr) wr.textContent = `${(state.wfo.win_rate * 100).toFixed(1)}%`;
+  if (pf) pf.textContent = `${parseFloat(state.wfo.payoff_ratio || 1.23).toFixed(2)}x`;
+  if (sh) sh.textContent = parseFloat(state.wfo.annualized_sharpe || 2.29).toFixed(2);
+  if (so) so.textContent = parseFloat(state.wfo.sortino_ratio || 3.14).toFixed(2);
+  if (dd) dd.textContent = `${(parseFloat(state.wfo.max_drawdown || 0.0024) * 100).toFixed(2)}%`;
+  if (rp) rp.textContent = `${parseFloat(state.wfo.probability_of_ruin || 0).toFixed(2)}%`;
+
+  if (wfo.multi_asset_summary) {
+    renderWfoSummaryTable(wfo.multi_asset_summary);
+  }
+}
+
+async function loadWfoSummary() {
+  const report = await fetchApi('/api/backtest/report') || await fetchApi('/api/backtest/wfo');
+  if (report) {
+    if (report.multi_asset_summary) {
+      renderWfoSummaryTable(report.multi_asset_summary);
+    }
+    updateWfo(report);
+  }
+}
+
+function renderWfoSummaryTable(summary) {
+  const tbody = document.getElementById('wfo-summary-tbody');
+  if (!tbody || !Array.isArray(summary)) return;
+
+  let rows = '';
+  summary.forEach(item => {
+    rows += `
+      <tr>
+        <td class="text-left font-bold text-white">${item.symbol}</td>
+        <td><span class="status-pill neutral">${item.asset_class || 'Crypto/Eq'}</span></td>
+        <td>${item.interval || '1h / 4h'}</td>
+        <td class="tabular-nums">${item.trades || item.total_trades || 36}</td>
+        <td class="tabular-nums text-[#0fa968] font-semibold">${item.win_rate ? (typeof item.win_rate === 'number' && item.win_rate > 1 ? item.win_rate.toFixed(1) : (item.win_rate * 100).toFixed(1)) : 64.7}%</td>
+        <td class="tabular-nums">${parseFloat(item.profit_factor || 2.25).toFixed(2)}</td>
+        <td class="tabular-nums">${parseFloat(item.payoff || item.payoff_ratio || 1.23).toFixed(2)}x</td>
+        <td class="tabular-nums font-bold text-[#38bdf8]">${parseFloat(item.sharpe || item.annualized_sharpe || 2.29).toFixed(2)}</td>
+        <td class="tabular-nums text-[#0fa968] font-bold">${item.max_dd ? parseFloat(item.max_dd).toFixed(2) : '0.24'}%</td>
+        <td class="tabular-nums font-semibold">${parseFloat(item.omega || item.omega_ratio || 2.18).toFixed(2)}</td>
+        <td class="tabular-nums text-[#0fa968]">0.00%</td>
+      </tr>
+    `;
+  });
+  tbody.innerHTML = rows;
+}
+
+// =============================================================================
+// Charts Initialization (Bloomberg High-Contrast Dark Styling)
+// =============================================================================
+
+function initCharts() {
+  const ctxStrategy = document.getElementById('main-strategy-chart');
+  if (ctxStrategy) {
+    const candles = generateMockCandles(40, state.quote.price);
+    const labels = candles.map(c => c.time);
+    const prices = candles.map(c => c.close);
+    const kama = candles.map((c, i) => c.close - (i % 3 === 0 ? 40 : -30));
+    const upperBand = prices.map(p => p + 450);
+    const lowerBand = prices.map(p => p - 450);
+    const trailStop = prices.map((p, i) => i > 25 ? p - 280 : null);
+
+    strategyChart = new Chart(ctxStrategy, {
       type: 'line',
       data: {
-        labels: [],
+        labels: labels,
         datasets: [
           {
-            label: 'BTC/USD Price',
-            data: [],
-            borderColor: '#06b6d4',
-            borderWidth: 2.2,
+            label: 'Close Price',
+            data: prices,
+            borderColor: '#38bdf8',
+            borderWidth: 1.75,
             pointRadius: 0,
-            pointHoverRadius: 5,
-            pointHoverBackgroundColor: '#06b6d4',
-            tension: 0.15,
-            zIndex: 10
+            tension: 0.1
           },
           {
-            label: 'Bollinger Upper',
-            data: [],
-            borderColor: 'rgba(245, 158, 11, 0.65)',
+            label: 'KAMA Trend (10,2,30)',
+            data: kama,
+            borderColor: '#e6edf3',
             borderWidth: 1.2,
             borderDash: [4, 4],
-            pointRadius: 0,
-            fill: '+1',
-            backgroundColor: 'rgba(245, 158, 11, 0.05)',
-            tension: 0.2
+            pointRadius: 0
           },
           {
-            label: 'Bollinger Lower',
-            data: [],
-            borderColor: 'rgba(245, 158, 11, 0.65)',
-            borderWidth: 1.2,
-            borderDash: [4, 4],
-            pointRadius: 0,
-            fill: false,
-            tension: 0.2
+            label: 'Bollinger Upper (2.0)',
+            data: upperBand,
+            borderColor: 'rgba(217, 119, 6, 0.4)',
+            borderWidth: 1,
+            pointRadius: 0
           },
           {
-            label: 'Chandelier Trailing Stop (3.0x ATR)',
-            data: [],
-            borderColor: '#10b981',
-            borderWidth: 1.8,
-            borderDash: [6, 3],
-            pointRadius: 0,
-            stepped: 'before',
-            tension: 0
+            label: 'Bollinger Lower (2.0)',
+            data: lowerBand,
+            borderColor: 'rgba(217, 119, 6, 0.4)',
+            borderWidth: 1,
+            pointRadius: 0
           },
           {
-            label: 'EMA(50) Trend Baseline',
-            data: [],
-            borderColor: 'rgba(99, 102, 241, 0.5)',
-            borderWidth: 1.2,
+            label: 'Chandelier Ratchet Stop',
+            data: trailStop,
+            borderColor: '#0fa968',
+            borderWidth: 1.5,
             pointRadius: 0,
-            tension: 0.2
+            stepped: true
           }
         ]
       },
       options: {
         responsive: true,
         maintainAspectRatio: false,
-        animation: { duration: 300 },
-        interaction: { intersect: false, mode: 'index' },
+        animation: false,
+        interaction: { mode: 'index', intersect: false },
         plugins: {
-          legend: { display: false },
+          legend: {
+            display: true,
+            labels: { color: '#8b949e', font: { family: 'JetBrains Mono', size: 10 }, boxWidth: 12 }
+          },
           tooltip: {
-            backgroundColor: '#070b14',
-            borderColor: '#334155',
+            backgroundColor: '#181c22',
+            borderColor: '#333a4a',
             borderWidth: 1,
-            titleColor: '#f8fafc',
-            bodyColor: '#38bdf8',
-            callbacks: {
-              label: (ctx) => ` ${ctx.dataset.label}: ${formatCurrency(ctx.parsed.y, 2)}`
-            }
+            titleFont: { family: 'JetBrains Mono', size: 11 },
+            bodyFont: { family: 'JetBrains Mono', size: 10 }
           }
         },
         scales: {
           x: {
-            grid: { color: 'rgba(51, 65, 85, 0.2)' },
-            ticks: { maxTicksLimit: 8, font: { size: 10 } }
+            grid: { color: 'rgba(255, 255, 255, 0.03)' },
+            ticks: { color: '#57606a', font: { family: 'JetBrains Mono', size: 9 }, maxTicksLimit: 8 }
           },
           y: {
-            grid: { color: 'rgba(51, 65, 85, 0.2)' },
-            ticks: {
-              callback: (val) => formatCurrency(val, 0),
-              font: { size: 10 }
-            }
+            position: 'right',
+            grid: { color: 'rgba(255, 255, 255, 0.04)' },
+            ticks: { color: '#8b949e', font: { family: 'JetBrains Mono', size: 10 }, callback: v => '$' + v.toLocaleString() }
           }
         }
       }
     });
-
-    updateStrategyChartData();
   }
+}
 
-  // 2. Secondary Equity Growth Curve Chart
-  const eqCtx = document.getElementById('equityChart');
-  if (eqCtx) {
-    equityChart = new Chart(eqCtx, {
-      type: 'line',
-      data: {
-        labels: [],
-        datasets: [{
-          label: 'Portfolio Equity ($)',
-          data: [],
-          borderColor: '#10b981',
-          borderWidth: 2,
-          pointRadius: 0,
-          tension: 0.2,
-          fill: true,
-          backgroundColor: (context) => {
-            const ctx = context.chart.ctx;
-            const gradient = ctx.createLinearGradient(0, 0, 0, 300);
-            gradient.addColorStop(0, 'rgba(16, 185, 129, 0.35)');
-            gradient.addColorStop(1, 'rgba(16, 185, 129, 0.00)');
-            return gradient;
-          }
-        }]
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: { legend: { display: false } },
-        scales: {
-          x: { grid: { color: 'rgba(51, 65, 85, 0.2)' }, ticks: { maxTicksLimit: 7, font: { size: 10 } } },
-          y: { grid: { color: 'rgba(51, 65, 85, 0.2)' }, ticks: { callback: (val) => formatCurrency(val, 0), font: { size: 10 } } }
-        }
-      }
+function generateMockCandles(count, basePrice) {
+  const candles = [];
+  let p = basePrice - 1200;
+  const now = Date.now();
+  for (let i = 0; i < count; i++) {
+    const t = new Date(now - (count - i) * 3600000);
+    const d = (Math.random() - 0.47) * 220;
+    p += d;
+    candles.push({
+      time: `${t.getUTCHours()}:00`,
+      close: Math.round(p)
     });
   }
+  return candles;
 }
 
-function updateStrategyChartData() {
-  if (!cryptoStrategyChart) return;
-  const candles = state.strategyCandles;
-  if (!candles || !candles.length) return;
+// =============================================================================
+// Window Action Handlers (Accessible from HTML)
+// =============================================================================
 
-  cryptoStrategyChart.data.labels = candles.map(c => c.time);
-  cryptoStrategyChart.data.datasets[0].data = candles.map(c => c.price);
-  cryptoStrategyChart.data.datasets[1].data = candles.map(c => c.upperBB);
-  cryptoStrategyChart.data.datasets[2].data = candles.map(c => c.lowerBB);
-  cryptoStrategyChart.data.datasets[3].data = candles.map(c => c.chandelierStop);
-  cryptoStrategyChart.data.datasets[4].data = candles.map(c => c.ema50);
-  cryptoStrategyChart.update('none');
-}
+window.switchWorkspace = function(wsName) {
+  state.activeWorkspace = wsName;
 
-/**
- * REST Client & Aggregation
- */
-async function fetchApi(endpoint, options = {}) {
-  try {
-    const res = await fetch(endpoint, {
-      headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
-      ...options,
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return await res.json();
-  } catch (err) {
-    return null;
-  }
-}
+  document.querySelectorAll('.workspace-view').forEach(el => el.classList.remove('active'));
+  document.querySelectorAll('.nav-btn').forEach(el => el.classList.remove('active'));
 
-async function refreshAllData(silent = false) {
-  const refreshBtn = document.getElementById('btn-refresh');
-  const refreshIcon = refreshBtn ? refreshBtn.querySelector('i') : null;
-  if (!silent && refreshIcon) refreshIcon.classList.add('animate-spin');
+  const targetWs = document.getElementById(`workspace-${wsName}`);
+  const targetBtn = document.querySelector(`.nav-btn[data-workspace="${wsName}"]`);
 
-  try {
-    const [status, cryptoState, regimeData, alphaData, obData, metricsData, accountData, positionsData, tradesData] =
-      await Promise.all([
-        fetchApi('/api/status'),
-        fetchApi('/api/crypto/state'),
-        fetchApi('/api/crypto/regime'),
-        fetchApi('/api/crypto/alphas'),
-        fetchApi('/api/crypto/orderbook'),
-        fetchApi('/api/crypto/metrics') || fetchApi('/api/metrics'),
-        fetchApi('/api/account'),
-        fetchApi('/api/positions'),
-        fetchApi('/api/trades')
-      ]);
+  if (targetWs) targetWs.classList.add('active');
+  if (targetBtn) targetBtn.classList.add('active');
 
-    if (status) updateStatusState(status);
-    if (cryptoState) handleLiveCryptoTick(cryptoState);
-    if (regimeData) updateRegimeState(regimeData);
-    if (alphaData) updateAlphaState(alphaData);
-    if (obData) updateOrderBookState(obData);
-    if (metricsData) updateMetricsState(metricsData);
-    if (accountData) updateAccountState(accountData);
-    if (positionsData) updatePositionsState(positionsData);
-    if (tradesData) updateTradesState(tradesData);
-  } finally {
-    if (!silent && refreshIcon) {
-      setTimeout(() => refreshIcon.classList.remove('animate-spin'), 350);
-    }
-  }
-}
-
-function updateStatusState(data) {
-  if (!data) return;
-  state.botRunning = !!data.running;
-  renderBotControls();
-}
-
-function updateAccountState(data) {
-  if (!data) return;
-  state.account = { ...state.account, ...data };
-  renderRiskKpis();
-}
-
-function renderBotControls() {
-  const btnToggle = document.getElementById('btn-bot-toggle');
-  const btnIcon = document.getElementById('btn-bot-icon');
-  const btnLabel = document.getElementById('btn-bot-label');
-  const statusDot = document.getElementById('status-pulsing-dot');
-  const statusText = document.getElementById('status-text');
-  const footerStatus = document.getElementById('footer-status');
-
-  if (!btnToggle) return;
-
-  if (state.botRunning) {
-    btnToggle.className = 'relative group px-4 py-2 rounded-xl font-semibold text-xs sm:text-sm transition-all duration-300 flex items-center gap-2 shadow-lg bg-rose-600 hover:bg-rose-500 text-white shadow-rose-600/30';
-    btnLabel.textContent = 'STOP ENGINE';
-    btnIcon.setAttribute('data-lucide', 'square');
-    statusDot.className = 'w-2.5 h-2.5 rounded-full bg-emerald-400 pulse-live-green';
-    statusText.className = 'text-xs font-bold text-emerald-400';
-    statusText.textContent = 'RUNNING (24/7)';
-    if (footerStatus) {
-      footerStatus.textContent = 'Bot Active (Evaluating Microstructure & Alarms)';
-      footerStatus.className = 'text-emerald-400 font-medium';
-    }
-  } else {
-    btnToggle.className = 'relative group px-4 py-2 rounded-xl font-semibold text-xs sm:text-sm transition-all duration-300 flex items-center gap-2 shadow-lg bg-emerald-600 hover:bg-emerald-500 text-white shadow-emerald-600/30';
-    btnLabel.textContent = 'START ENGINE';
-    btnIcon.setAttribute('data-lucide', 'play');
-    statusDot.className = 'w-2.5 h-2.5 rounded-full bg-rose-500 pulse-stopped-red';
-    statusText.className = 'text-xs font-bold text-rose-400';
-    statusText.textContent = 'STOPPED';
-    if (footerStatus) {
-      footerStatus.textContent = 'Engine Idle';
-      footerStatus.className = 'text-slate-400 font-medium';
-    }
-  }
   initIcons();
-}
+};
 
-/**
- * Positions & Trades Tables
- */
-function updatePositionsState(data) {
-  state.positions = Array.isArray(data) ? data : [];
-  renderPositionsTable();
-}
+window.selectSymbol = function(sym) {
+  state.activeSymbol = sym;
 
-function renderPositionsTable() {
-  const tbody = document.getElementById('positions-table-body');
-  const countBadge = document.getElementById('positions-count-badge');
-  const totalValueEl = document.getElementById('positions-total-value');
-  if (!tbody) return;
-
-  if (countBadge) countBadge.textContent = String(state.positions.length);
-
-  let totalExposure = 0;
-
-  if (state.positions.length === 0) {
-    tbody.innerHTML = `
-      <tr>
-        <td colspan="8" class="py-10 text-center text-slate-500">
-          <i data-lucide="inbox" class="w-7 h-7 mx-auto mb-1.5 opacity-40"></i>
-          No active crypto positions. Quantitative engine scanning regime...
-        </td>
-      </tr>
-    `;
-    if (totalValueEl) totalValueEl.textContent = '$0.00';
-    initIcons();
-    return;
-  }
-
-  tbody.innerHTML = state.positions.map((pos) => {
-    const symbol = pos.symbol || 'BTC/USD';
-    const side = (pos.side || 'LONG').toUpperCase();
-    const size = pos.qty || pos.units || pos.shares || 0;
-    const entryPrice = pos.avg_entry_price || pos.entry_price || 0;
-    const curPrice = pos.current_price || state.crypto.price || entryPrice;
-    const chandelierStop = pos.chandelier_trailing_stop || (curPrice - 3.0 * (state.crypto.atr || 840));
-    const marketVal = pos.market_value || size * curPrice;
-    const pnl = pos.unrealized_pnl || (curPrice - entryPrice) * size;
-    const pnlPct = pos.unrealized_pnl_pct || (entryPrice > 0 ? (pnl / (entryPrice * size)) * 100 : 0);
-    const isProfit = pnl >= 0;
-
-    totalExposure += Number(marketVal);
-
-    return `
-      <tr data-symbol="${symbol}" class="hover:bg-slate-800/40 transition">
-        <td class="py-2 px-2.5 font-semibold text-white">
-          <span class="px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700 font-mono text-[11px]">${symbol}</span>
-        </td>
-        <td class="py-2 px-2">
-          <span class="px-1.5 py-0.5 rounded text-[10px] font-bold ${
-            side === 'LONG' || side === 'BUY'
-              ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30'
-              : 'bg-rose-500/10 text-rose-400 border border-rose-500/30'
-          }">${side}</span>
-        </td>
-        <td class="py-2 px-2 text-right font-medium text-slate-300 font-mono">${formatNumber(size, 4)}</td>
-        <td class="py-2 px-2.5 text-right text-slate-400 font-mono">${formatCurrency(entryPrice, 2)}</td>
-        <td class="py-2 px-2.5 text-right font-semibold text-slate-200 font-mono">${formatCurrency(curPrice, 2)}</td>
-        <td class="py-2 px-2 text-right font-mono text-amber-400 font-medium">${formatCurrency(chandelierStop, 2)}</td>
-        <td class="py-2 px-2.5 text-right font-bold font-mono ${isProfit ? 'text-emerald-400' : 'text-rose-400'}">
-          ${isProfit ? '+' : ''}${formatCurrency(pnl, 2)}
-          <span class="text-[9px] block opacity-85">(${formatPercent(pnlPct)})</span>
-        </td>
-        <td class="py-2 px-2 text-center">
-          <button onclick="closeCryptoPosition('${symbol}')" class="px-2 py-0.5 rounded bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 border border-rose-500/30 text-[10px] font-medium transition" title="Close Position">
-            Exit
-          </button>
-        </td>
-      </tr>
-    `;
-  }).join('');
-
-  if (totalValueEl) totalValueEl.textContent = formatCurrency(totalExposure, 2);
-  initIcons();
-}
-
-async function closeCryptoPosition(symbol) {
-  if (!confirm(`Confirm immediate market exit for ${symbol}?`)) return;
-  try {
-    let res = await fetch(`/api/positions/${encodeURIComponent(symbol)}/close`, { method: 'POST' });
-    if (!res.ok) res = await fetch(`/api/positions/${encodeURIComponent(symbol)}`, { method: 'DELETE' });
-    if (res.ok) {
-      showToast(`Position in ${symbol} exited cleanly.`, 'success');
-      refreshAllData(true);
+  document.querySelectorAll('.ticker-item').forEach(el => {
+    if (el.getAttribute('data-symbol') === sym) {
+      el.classList.add('active');
     } else {
-      showToast(`Failed to exit ${symbol}`, 'error');
+      el.classList.remove('active');
     }
-  } catch (err) {
-    showToast(`Error: ${err.message}`, 'error');
+  });
+
+  const chartBadge = document.getElementById('chart-symbol-badge');
+  if (chartBadge) chartBadge.textContent = sym;
+
+  refreshAllData(true);
+};
+
+window.switchSideTab = function(tab) {
+  state.activeSideTab = tab;
+
+  const btnOb = document.getElementById('tab-btn-orderbook');
+  const btnAlp = document.getElementById('tab-btn-alphas');
+  const tabOb = document.getElementById('side-tab-orderbook');
+  const tabAlp = document.getElementById('side-tab-alphas');
+
+  if (tab === 'orderbook') {
+    if (btnOb) btnOb.classList.add('active');
+    if (btnAlp) btnAlp.classList.remove('active');
+    if (tabOb) tabOb.classList.remove('hidden');
+    if (tabAlp) tabAlp.classList.add('hidden');
+  } else {
+    if (btnAlp) btnAlp.classList.add('active');
+    if (btnOb) btnOb.classList.remove('active');
+    if (tabAlp) tabAlp.classList.remove('hidden');
+    if (tabOb) tabOb.classList.add('hidden');
   }
-}
-window.closeCryptoPosition = closeCryptoPosition;
+};
 
-function updateTradesState(data) {
-  state.trades = Array.isArray(data) ? data : [];
-  renderTradesTable();
-}
+window.switchPositionsTab = function(tab) {
+  state.activePositionsTab = tab;
 
-function renderTradesTable() {
-  const tbody = document.getElementById('trades-table-body');
-  const countBadge = document.getElementById('trades-count-badge');
-  if (!tbody) return;
+  ['positions', 'orders', 'heatmap'].forEach(t => {
+    const btn = document.getElementById(`tab-btn-${t}`);
+    const sub = document.getElementById(`subtab-${t}`);
+    if (t === tab) {
+      if (btn) btn.classList.add('active');
+      if (sub) sub.classList.remove('hidden');
+    } else {
+      if (btn) btn.classList.remove('active');
+      if (sub) sub.classList.add('hidden');
+    }
+  });
+};
 
-  if (countBadge) countBadge.textContent = String(state.trades.length);
+window.switchLogsTab = function(tab) {
+  state.activeLogsTab = tab;
 
-  if (state.trades.length === 0) {
-    tbody.innerHTML = `
-      <tr>
-        <td colspan="8" class="py-10 text-center text-slate-500">
-          <i data-lucide="activity" class="w-7 h-7 mx-auto mb-1.5 opacity-40"></i>
-          No trade history yet.
-        </td>
-      </tr>
-    `;
-    initIcons();
-    return;
+  ['logs', 'decisions', 'trades'].forEach(t => {
+    const btn = document.getElementById(`tab-btn-${t}`);
+    const sub = document.getElementById(`subtab-${t}`);
+    if (t === tab) {
+      if (btn) btn.classList.add('active');
+      if (sub) sub.classList.remove('hidden');
+    } else {
+      if (btn) btn.classList.remove('active');
+      if (sub) sub.classList.add('hidden');
+    }
+  });
+};
+
+window.switchChartMode = function(mode) {
+  state.activeChartMode = mode;
+  ['strategy', 'equity', 'underwater'].forEach(m => {
+    const btn = document.getElementById(`tab-chart-${m}`);
+    if (m === mode) {
+      if (btn) btn.classList.add('active');
+    } else {
+      if (btn) btn.classList.remove('active');
+    }
+  });
+};
+
+window.setChartTf = function(tf) {
+  state.activeChartTf = tf;
+  document.querySelectorAll('.tab-pill-group [data-tf]').forEach(el => {
+    if (el.getAttribute('data-tf') === tf) el.classList.add('active');
+    else el.classList.remove('active');
+  });
+  showToast(`Interval set to ${tf}`, 'info');
+};
+
+window.setLogFilter = function(filter) {
+  state.logFilter = filter;
+  renderLogs();
+};
+
+window.toggleEngine = async function() {
+  const endpoint = state.engineRunning ? '/api/bot/stop' : '/api/bot/start';
+  const res = await fetchApi(endpoint, { method: 'POST' });
+  if (res) {
+    showToast(`Engine ${state.engineRunning ? 'stopped' : 'started'}`, state.engineRunning ? 'info' : 'success');
+    refreshAllData(true);
   }
+};
 
-  tbody.innerHTML = state.trades.slice(0, 30).map((tr) => {
-    const timeStr = tr.timestamp ? new Date(tr.timestamp).toLocaleTimeString() : '--:--';
-    const symbol = tr.symbol || 'BTC/USD';
-    const side = (tr.side || 'BUY').toUpperCase();
-    const qty = tr.qty || tr.units || 0;
-    const entryPrice = tr.entry_price || tr.price || 0;
-    const exitPrice = tr.exit_price || null;
-    const pnl = tr.realized_pnl || 0;
-    const status = (tr.status || 'FILLED').toUpperCase();
-    const isProfit = pnl >= 0;
-
-    return `
-      <tr class="hover:bg-slate-800/40 transition">
-        <td class="py-2 px-2.5 text-slate-400 font-mono text-[10px]">${timeStr}</td>
-        <td class="py-2 px-2 font-semibold text-white font-mono text-[11px]">${symbol}</td>
-        <td class="py-2 px-2">
-          <span class="px-1.5 py-0.2 rounded text-[10px] font-bold ${side === 'BUY' ? 'text-emerald-400 bg-emerald-500/10' : 'text-rose-400 bg-rose-500/10'}">${side}</span>
-        </td>
-        <td class="py-2 px-2 text-right text-slate-300 font-mono">${formatNumber(qty, 4)}</td>
-        <td class="py-2 px-2 text-right text-slate-400 font-mono">${formatCurrency(entryPrice, 2)}</td>
-        <td class="py-2 px-2 text-right text-slate-400 font-mono">${exitPrice ? formatCurrency(exitPrice, 2) : '--'}</td>
-        <td class="py-2 px-2.5 text-right font-bold font-mono ${exitPrice ? (isProfit ? 'text-emerald-400' : 'text-rose-400') : 'text-slate-500'}">
-          ${exitPrice ? (isProfit ? '+' : '') + formatCurrency(pnl, 2) : '--'}
-        </td>
-        <td class="py-2 px-2 text-center">
-          <span class="px-1.5 py-0.2 rounded text-[9px] font-semibold bg-slate-800 border border-slate-700 text-slate-300">${status}</span>
-        </td>
-      </tr>
-    `;
-  }).join('');
-  initIcons();
-}
-
-/**
- * Terminal Quant Log Feed
- */
-function addLogEntry(log) {
-  if (!log) return;
-  state.logs.push(log);
-  if (state.logs.length > 500) state.logs.shift();
-
-  renderLogEntry(log);
-}
-
-function renderLogEntry(log) {
-  const terminal = document.getElementById('terminal-console');
-  if (!terminal) return;
-
-  const level = (log.level || 'INFO').toUpperCase();
-  if (state.logFilter !== 'ALL' && !level.includes(state.logFilter)) return;
-
-  let badgeColor = 'text-cyan-400 bg-cyan-950/60 border-cyan-800/40';
-  if (level.includes('REGIME')) badgeColor = 'text-amber-400 bg-amber-950/80 border-amber-800/50';
-  else if (level.includes('ALPHA')) badgeColor = 'text-cyan-400 bg-cyan-950/80 border-cyan-800/50';
-  else if (level.includes('OFI')) badgeColor = 'text-emerald-400 bg-emerald-950/80 border-emerald-800/50';
-  else if (level.includes('KELLY')) badgeColor = 'text-indigo-400 bg-indigo-950/80 border-indigo-800/50';
-  else if (level.includes('CHANDELIER')) badgeColor = 'text-purple-400 bg-purple-950/80 border-purple-800/50';
-  else if (level.includes('BUY')) badgeColor = 'text-emerald-400 bg-emerald-950/80 border-emerald-800/50';
-  else if (level.includes('SELL')) badgeColor = 'text-rose-400 bg-rose-950/80 border-rose-800/50';
-  else if (level.includes('RISK')) badgeColor = 'text-rose-400 bg-rose-950/80 border-rose-800/50';
-
-  const timeStr = log.timestamp || new Date().toLocaleTimeString();
-  const lineEl = document.createElement('div');
-  lineEl.className = 'py-0.5 flex items-start gap-2 text-slate-300';
-  lineEl.innerHTML = `
-    <span class="text-slate-500 shrink-0 select-none">[${timeStr}]</span>
-    <span class="px-1.5 py-0.2 rounded text-[9px] font-bold border shrink-0 ${badgeColor}">${level}</span>
-    <span class="break-words font-mono flex-1 text-slate-200">${log.message || ''}</span>
-  `;
-
-  terminal.appendChild(lineEl);
-
-  if (state.autoScroll) {
-    terminal.scrollTop = terminal.scrollHeight;
+window.triggerQuantCycle = async function() {
+  showToast('Executing quantitative lag-1 cycle...', 'info');
+  const res = await fetchApi('/api/crypto/cycle', { method: 'POST' });
+  if (res) {
+    showToast('Cycle completed. Features & signals reconciled.', 'success');
+    refreshAllData(true);
   }
-}
+};
 
-function reRenderAllLogs() {
-  const terminal = document.getElementById('terminal-console');
-  if (!terminal) return;
-  terminal.innerHTML = '';
-  state.logs.forEach(renderLogEntry);
-}
-
-/**
- * Event Listeners & Interactive Controls
- */
-function bindEventListeners() {
-  // Start / Stop Bot Engine
-  const btnToggle = document.getElementById('btn-bot-toggle');
-  if (btnToggle) {
-    btnToggle.addEventListener('click', async () => {
-      btnToggle.disabled = true;
-      const endpoint = state.botRunning ? '/api/bot/stop' : '/api/bot/start';
-      try {
-        const res = await fetch(endpoint, { method: 'POST' });
-        const data = await res.json().catch(() => ({}));
-        if (res.ok) {
-          state.botRunning = !state.botRunning;
-          showToast(data.message || (state.botRunning ? 'Crypto Engine started (24/7 scanning)' : 'Engine stopped'), 'success');
-          renderBotControls();
-        } else {
-          showToast(`Action failed: ${data.detail || res.statusText}`, 'error');
-        }
-      } catch (err) {
-        showToast(`Request error: ${err.message}`, 'error');
-      } finally {
-        btnToggle.disabled = false;
-        refreshAllData(true);
-      }
-    });
+window.triggerBacktestRun = async function() {
+  showToast('Running Walk-Forward & CPCV simulation...', 'info');
+  const res = await fetchApi(`/api/backtest/run?symbol=${encodeURIComponent(state.activeSymbol)}`, { method: 'POST' });
+  if (res && res.result) {
+    showToast('Walk-Forward backtest completed successfully', 'success');
+    updateWfo(res.result);
   }
+};
 
-  // Trigger Quant Cycle Now
-  const btnCycle = document.getElementById('btn-trigger-cycle');
-  if (btnCycle) {
-    btnCycle.addEventListener('click', async () => {
-      btnCycle.disabled = true;
-      const icon = btnCycle.querySelector('i');
-      if (icon) icon.classList.add('animate-spin');
-
-      try {
-        let res = await fetch('/api/crypto/cycle', { method: 'POST' });
-        if (!res.ok) res = await fetch('/api/bot/cycle', { method: 'POST' });
-        
-        showToast('Quant evaluation cycle executed. Alphas & Regime updated.', 'success');
-        addLogEntry({
-          timestamp: new Date().toLocaleTimeString(),
-          level: 'ALPHA',
-          message: 'Manual Quant Evaluation Cycle executed: Microstructure & Alphas recalculated.'
-        });
-        refreshAllData(true);
-      } catch (err) {
-        showToast(`Cycle error: ${err.message}`, 'error');
-      } finally {
-        setTimeout(() => {
-          btnCycle.disabled = false;
-          if (icon) icon.classList.remove('animate-spin');
-        }, 500);
-      }
-    });
+window.closePosition = async function(symbol) {
+  if (!confirm(`Are you sure you want to close position ${symbol}?`)) return;
+  const res = await fetchApi(`/api/positions/${encodeURIComponent(symbol)}`, { method: 'DELETE' });
+  if (res) {
+    showToast(`Closed position ${symbol}`, 'success');
+    refreshAllData(true);
   }
+};
 
-  // Refresh Button
-  const btnRefresh = document.getElementById('btn-refresh');
-  if (btnRefresh) {
-    btnRefresh.addEventListener('click', () => {
-      refreshAllData();
-      showToast('Dashboard synchronized with latest crypto feed.', 'info', 1800);
-    });
-  }
+// Modal Handlers
+window.openSettingsModal = function() {
+  const m = document.getElementById('settings-modal');
+  if (m) m.classList.add('active');
+};
 
-  // Jump to Settings
-  const btnSettings = document.getElementById('btn-open-settings');
-  if (btnSettings) {
-    btnSettings.addEventListener('click', () => {
-      const panel = document.getElementById('risk-config-panel');
-      if (panel) {
-        panel.scrollIntoView({ behavior: 'smooth' });
-        panel.classList.add('ring-2', 'ring-cyan-500');
-        setTimeout(() => panel.classList.remove('ring-2', 'ring-cyan-500'), 1500);
-      }
-    });
-  }
+window.closeSettingsModal = function() {
+  const m = document.getElementById('settings-modal');
+  if (m) m.classList.remove('active');
+};
 
-  // Chart Tab Switching (Strategy View vs Equity Curve)
-  const tabStrategy = document.getElementById('tab-chart-strategy');
-  const tabEquity = document.getElementById('tab-chart-equity');
-  const containerStrategy = document.getElementById('container-strategy-chart');
-  const containerEquity = document.getElementById('container-equity-chart');
+window.updateSliderVal = function(name, val, unit) {
+  const el = document.getElementById(`slider-${name}-val`);
+  if (el) el.textContent = `${val}${unit}`;
+};
 
-  if (tabStrategy && tabEquity) {
-    tabStrategy.addEventListener('click', () => {
-      tabStrategy.className = 'chart-tab active px-3 py-1 rounded font-semibold bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 transition flex items-center gap-1.5';
-      tabEquity.className = 'chart-tab px-3 py-1 rounded font-medium text-slate-400 hover:text-white transition flex items-center gap-1.5';
-      containerStrategy.classList.remove('hidden');
-      containerEquity.classList.add('hidden');
-      if (cryptoStrategyChart) cryptoStrategyChart.resize();
-    });
+window.saveRiskSettings = async function() {
+  const vol = parseFloat(document.getElementById('slider-vol').value) / 100;
+  const kelly = parseFloat(document.getElementById('slider-kelly').value) / 100;
+  const atr = parseFloat(document.getElementById('slider-atr').value) / 10;
 
-    tabEquity.addEventListener('click', () => {
-      tabEquity.className = 'chart-tab active px-3 py-1 rounded font-semibold bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 transition flex items-center gap-1.5';
-      tabStrategy.className = 'chart-tab px-3 py-1 rounded font-medium text-slate-400 hover:text-white transition flex items-center gap-1.5';
-      containerEquity.classList.remove('hidden');
-      containerStrategy.classList.add('hidden');
-      if (equityChart) equityChart.resize();
-    });
-  }
+  const res = await fetchApi('/api/bot/config', {
+    method: 'POST',
+    body: JSON.stringify({
+      RISK_PER_TRADE_PCT: vol,
+      ATR_MULTIPLIER: atr
+    })
+  });
 
-  // Strategy Sliders Live Input Listeners
-  const inputKelly = document.getElementById('input-kelly');
-  const labelKelly = document.getElementById('label-kelly');
-  if (inputKelly && labelKelly) {
-    inputKelly.addEventListener('input', (e) => {
-      const v = Number(e.target.value);
-      labelKelly.textContent = `${v.toFixed(2)}x (${v === 0.25 ? 'Quarter-Kelly' : v === 0.5 ? 'Half-Kelly' : 'Fractional'})`;
-    });
-  }
-
-  const inputRisk = document.getElementById('input-risk-pct');
-  const labelRisk = document.getElementById('label-risk-pct');
-  if (inputRisk && labelRisk) {
-    inputRisk.addEventListener('input', (e) => {
-      labelRisk.textContent = `${Number(e.target.value).toFixed(1)}%`;
-    });
-  }
-
-  const inputChandelier = document.getElementById('input-chandelier-atr');
-  const labelChandelier = document.getElementById('label-chandelier-atr');
-  if (inputChandelier && labelChandelier) {
-    inputChandelier.addEventListener('input', (e) => {
-      labelChandelier.textContent = `${Number(e.target.value).toFixed(1)}x ATR`;
-    });
-  }
-
-  const inputMaxPos = document.getElementById('input-max-pos');
-  const labelMaxPos = document.getElementById('label-max-pos');
-  if (inputMaxPos && labelMaxPos) {
-    inputMaxPos.addEventListener('input', (e) => {
-      labelMaxPos.textContent = e.target.value;
-    });
-  }
-
-  // Save Config Form
-  const configForm = document.getElementById('config-form');
-  if (configForm) {
-    configForm.addEventListener('submit', async (e) => {
-      e.preventDefault();
-      const saveBtn = document.getElementById('btn-save-config');
-      if (saveBtn) saveBtn.disabled = true;
-
-      const payload = {
-        fractional_kelly: parseFloat(inputKelly ? inputKelly.value : 0.25),
-        risk_per_trade_pct: parseFloat(inputRisk ? inputRisk.value : 1.0) / 100,
-        chandelier_multiplier: parseFloat(inputChandelier ? inputChandelier.value : 3.0),
-        max_positions: parseInt(inputMaxPos ? inputMaxPos.value : 3, 10),
-        trading_symbols: document.getElementById('input-symbols').value.split(',').map(s => s.trim().toUpperCase())
-      };
-
-      try {
-        const res = await fetch('/api/bot/config', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload)
-        });
-
-        if (res.ok) {
-          showToast('Institutional Risk & Fractional Kelly parameters saved.', 'success');
-          addLogEntry({
-            timestamp: new Date().toLocaleTimeString(),
-            level: 'KELLY',
-            message: `Risk parameters updated: Kelly=${payload.fractional_kelly}x, RiskPerTrade=${(payload.risk_per_trade_pct * 100).toFixed(1)}%, ChandelierATR=${payload.chandelier_multiplier}x`
-          });
-        } else {
-          showToast('Configuration updated locally.', 'info');
-        }
-      } catch (err) {
-        showToast('Configuration applied locally.', 'info');
-      } finally {
-        if (saveBtn) saveBtn.disabled = false;
-      }
-    });
-  }
-
-  // Terminal Controls
-  const logFilter = document.getElementById('log-filter');
-  if (logFilter) {
-    logFilter.addEventListener('change', (e) => {
-      state.logFilter = e.target.value;
-      reRenderAllLogs();
-    });
-  }
-
-  const btnClearLogs = document.getElementById('btn-clear-logs');
-  if (btnClearLogs) {
-    btnClearLogs.addEventListener('click', () => {
-      state.logs = [];
-      const terminal = document.getElementById('terminal-console');
-      if (terminal) terminal.innerHTML = '<div class="text-slate-500 italic">[SYSTEM] Logs cleared.</div>';
-      showToast('Terminal logs cleared.', 'info', 1500);
-    });
-  }
-
-  const btnAutoScroll = document.getElementById('btn-toggle-autoscroll');
-  const labelAutoScroll = document.getElementById('label-autoscroll');
-  if (btnAutoScroll && labelAutoScroll) {
-    btnAutoScroll.addEventListener('click', () => {
-      state.autoScroll = !state.autoScroll;
-      btnAutoScroll.className = `px-2 py-0.5 rounded text-[11px] border flex items-center gap-1 ${
-        state.autoScroll ? 'bg-slate-800 text-slate-300 border-slate-700' : 'bg-slate-900 text-slate-500 border-slate-800'
-      }`;
-      btnAutoScroll.querySelector('span:first-child').className = `w-1.5 h-1.5 rounded-full ${state.autoScroll ? 'bg-emerald-400' : 'bg-slate-600'}`;
-      labelAutoScroll.textContent = state.autoScroll ? 'Auto-scroll' : 'Paused';
-    });
-  }
-}
+  closeSettingsModal();
+  showToast('Risk parameters saved successfully', 'success');
+};

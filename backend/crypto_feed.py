@@ -124,6 +124,7 @@ class CryptoOrderBook:
             "bid_depth": self.bid_volume,
             "ask_depth": self.ask_volume,
             "depth_imbalance": self.depth_imbalance,
+            "volume_imbalance_ratio": self.depth_imbalance,
             "bids_list": [[b["price"], b["size"]] for b in self.bids],
             "asks_list": [[a["price"], a["size"]] for a in self.asks],
         }
@@ -240,6 +241,37 @@ class SyntheticCryptoGenerator:
             "prev_ofi": 0.0,
         }
 
+        spy_cfg = {
+            "base_price": 582.40,
+            "current_price": 582.40,
+            "min_atr": 1.5,
+            "max_atr": 6.0,
+            "target_atr": 3.2,
+            "tick_size": 0.01,
+            "spread_range": (0.01, 0.04),
+            "level_step": 0.05,
+            "avg_level_size": 250.0,
+            "avg_bar_volume": 25000.0,
+            "cvd": 0.0,
+            "prev_bbo": None,
+            "prev_ofi": 0.0,
+        }
+        qqq_cfg = {
+            "base_price": 496.80,
+            "current_price": 496.80,
+            "min_atr": 1.8,
+            "max_atr": 7.0,
+            "target_atr": 3.8,
+            "tick_size": 0.01,
+            "spread_range": (0.01, 0.05),
+            "level_step": 0.05,
+            "avg_level_size": 200.0,
+            "avg_bar_volume": 20000.0,
+            "cvd": 0.0,
+            "prev_bbo": None,
+            "prev_ofi": 0.0,
+        }
+
         self.state: Dict[str, Dict[str, Any]] = {
             "BTC/USD": dict(btc_cfg),
             "BTC/USDT": dict(btc_cfg),
@@ -247,6 +279,8 @@ class SyntheticCryptoGenerator:
             "ETH/USDT": dict(eth_cfg),
             "SOL/USD": dict(sol_cfg),
             "SOL/USDT": dict(sol_cfg),
+            "SPY": dict(spy_cfg),
+            "QQQ": dict(qqq_cfg),
         }
         self._historical_bars: Dict[str, List[Dict[str, Any]]] = {}
         self._seed_all_bars(limit=100)

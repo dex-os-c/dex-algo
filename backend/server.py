@@ -12,7 +12,7 @@ CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 if CURRENT_DIR not in sys.path:
     sys.path.insert(0, CURRENT_DIR)
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Query
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Query, Header, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
@@ -53,6 +53,24 @@ class ConfigUpdateRequest(BaseModel):
     ATR_PERIOD: Optional[int] = None
     ATR_MULTIPLIER: Optional[float] = None
     TAKE_PROFIT_MULTIPLIER: Optional[float] = None
+
+
+def verify_api_key(
+    x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
+    authorization: Optional[str] = Header(None)
+) -> bool:
+    """Validates API Key on mutating actions when DEX_API_KEY environment variable is configured."""
+    configured_key = os.environ.get("DEX_API_KEY", "").strip()
+    if not configured_key:
+        return True  # Open access for local development if no key configured
+    token = None
+    if x_api_key:
+        token = x_api_key.strip()
+    elif authorization and authorization.startswith("Bearer "):
+        token = authorization[7:].strip()
+    if token != configured_key:
+        raise HTTPException(status_code=401, detail="Unauthorized: Invalid or missing DEX API Key")
+    return True
 
 
 async def broadcast_ws(message: Dict[str, Any]):
@@ -121,11 +139,29 @@ def fetch_crypto_quote(symbol: str = "BTC/USD") -> Dict[str, Any]:
         low = base_price - 55.0
         change_pct = round(1.85 + (jitter * 0.01), 2)
         volume = 48500.0
+    elif "SOL" in symbol_clean:
+        base_price = 184.60 + jitter * 0.005
+        high = round(base_price + 3.80, 2)
+        low = round(base_price - 4.20, 2)
+        change_pct = round(4.12 + (jitter * 0.003), 2)
+        volume = 125400.0
+    elif "SPY" in symbol_clean:
+        base_price = 582.40 + jitter * 0.003
+        high = round(base_price + 2.40, 2)
+        low = round(base_price - 2.10, 2)
+        change_pct = round(0.48 + (jitter * 0.001), 2)
+        volume = 64200000.0
+    elif "QQQ" in symbol_clean:
+        base_price = 496.80 + jitter * 0.003
+        high = round(base_price + 3.10, 2)
+        low = round(base_price - 2.60, 2)
+        change_pct = round(0.62 + (jitter * 0.001), 2)
+        volume = 48500000.0
     else:
-        base_price = 65420.0 + jitter
+        base_price = 67940.0 + jitter
         high = round(base_price + 680.0, 2)
         low = round(base_price - 740.0, 2)
-        change_pct = round(2.74 + (jitter * 0.005), 2)
+        change_pct = round(-2.51 + (jitter * 0.005), 2)
         volume = 19420.5
 
     return {
@@ -136,8 +172,16 @@ def fetch_crypto_quote(symbol: str = "BTC/USD") -> Dict[str, Any]:
         "high_24h": high,
         "low_24h": low,
         "volume_24h": volume,
+        "is_mock": True,
+        "data_source": "SIMULATED_MOCK",
         "timestamp": now.isoformat()
     }
+
+
+def fetch_all_quotes() -> List[Dict[str, Any]]:
+    """Retrieves real-time market quotes across the primary crypto and equity watchlist."""
+    symbols = ["BTC/USD", "ETH/USD", "SOL/USD", "SPY", "QQQ"]
+    return [fetch_crypto_quote(s) for s in symbols]
 
 
 def fetch_crypto_regime(symbol: str = "BTC/USD") -> Dict[str, Any]:
@@ -430,6 +474,8 @@ def fetch_crypto_orderbook(symbol: str = "BTC/USD", depth: int = 10) -> Dict[str
                         ob["bid_depth"] = ob["bid_volume"]
                     if "ask_depth" not in ob and "ask_volume" in ob:
                         ob["ask_depth"] = ob["ask_volume"]
+                    if "volume_imbalance_ratio" not in ob:
+                        ob["volume_imbalance_ratio"] = ob.get("depth_imbalance", 0.0)
                     return ob
     except Exception:
         pass
@@ -1006,6 +1052,13 @@ def get_status():
     return eng.get_status()
 
 
+@app.get("/api/market/quotes")
+@app.get("/api/quotes")
+def get_market_quotes():
+    """Returns real-time quotes across the primary crypto & equity watchlist."""
+    return database.sanitize_for_json(fetch_all_quotes())
+
+
 @app.get("/api/account")
 def get_account():
     client = get_alpaca()
@@ -1360,6 +1413,14 @@ async def websocket_endpoint(websocket: WebSocket):
                             eng.trigger_crypto_cycle()
                         else:
                             eng.execute_cycle()
+                    elif action == "ping":
+                        await websocket.send_text(database.safe_json_dumps({
+                            "type": "PONG",
+                            "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat()
+                        }))
+                    elif action == "get_quotes":
+                        q_data = fetch_all_quotes()
+                        await websocket.send_text(database.safe_json_dumps({"type": "QUOTES", "data": q_data}))
                     elif action == "get_regime":
                         reg = fetch_crypto_regime(sym)
                         await websocket.send_text(database.safe_json_dumps({"type": "REGIME", "data": reg}))
